@@ -1,0 +1,11 @@
+backend/venv/
+backend/.venv/
+.venv/
+venv/
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.env
+.env.local
+data/live_market_data.csv
