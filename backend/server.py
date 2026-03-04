@@ -221,8 +221,8 @@ async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, is_training
     global balance, position, entry_price, wins, losses
     
-    exchange = ccxt.binance({'enableRateLimit': True})
-    print(f">>> 🚀 CONECTADO AO MERCADO REAL. AGUARDANDO ALVOS...")
+    exchange = ccxt.bybit({'enableRateLimit': True})
+    print(f">>> 🚀 CONECTADO AO MERCADO REAL (BYBIT). AGUARDANDO ALVOS...")
 
     startup_phase = True
     startup_timer = 0
