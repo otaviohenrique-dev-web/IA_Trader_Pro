@@ -334,7 +334,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# --- ESTA É A ROTA QUE A VERCEL ESTAVA PROCURANDO! ---
+@app.get("/")
+async def health_check():
+    return {"status": "IA Trader Pro Backend Online e Respirando!"}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
