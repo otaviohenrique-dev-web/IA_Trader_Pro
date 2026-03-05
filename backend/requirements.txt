@@ -9,3 +9,4 @@ sb3-contrib
 shimmy
 gymnasium
 websockets
+python-multipart
