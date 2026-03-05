@@ -1,3 +1,6 @@
+from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
+import shutil
 import asyncio
 import json
 import time
@@ -278,8 +281,9 @@ async def sniper_loop():
                             else: losses += 1
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
 
-                            if state["adaptation"]["trades_analyzed"] % 3 == 0 and not is_training:
-                                asyncio.create_task(evolve_apocalypse())
+                            #if state["adaptation"]["trades_analyzed"] % 3 == 0 and not is_training:
+                            #   asyncio.create_task(evolve_apocalypse())
+                            pass # Evolução Automática Pausada (Modo Híbrido)
 
                         if target_pos != 0:
                             fee = balance * FEE_RATE; balance -= fee
@@ -337,6 +341,66 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.get("/")
 async def health_check():
     return {"status": "IA Trader Pro Backend Online e Respirando!"}
+
+# --- ROTAS DO MODO HÍBRIDO (DOJO LOCAL) ---
+
+@app.get("/download-dados")
+async def download_dados(senha: str):
+    admin_pass = os.environ.get("ADMIN_PASSWORD", "senha_padrao_secreta")
+    if senha != admin_pass:
+        raise HTTPException(status_code=403, detail="Acesso Negado: Senha Incorreta.")
+    
+    if not os.path.exists(DATA_PATH):
+        raise HTTPException(status_code=404, detail="Nenhum dado coletado ainda.")
+        
+    # Checagem de 24 horas baseada no próprio arquivo de dados
+    df = pd.read_csv(DATA_PATH)
+    if len(df) > 0:
+        first_ts = pd.to_datetime(df.iloc[0]['timestamp'])
+        last_ts = pd.to_datetime(df.iloc[-1]['timestamp'])
+        hours_collected = (last_ts - first_ts).total_seconds() / 3600
+        
+        if hours_collected < 24.0:
+            # Não bloqueia o download, mas avisa o usuário (o frontend pode travar o botão com esse dado)
+            print(f"⚠️ Aviso: Apenas {hours_collected:.1f}h de dados coletados.")
+            
+    filename = f"mercado_real_{datetime.now().strftime('%Y%m%d')}.csv"
+    return FileResponse(DATA_PATH, media_type='text/csv', filename=filename)
+
+@app.post("/upload-cerebro")
+async def upload_cerebro(senha: str, file: UploadFile = File(...)):
+    admin_pass = os.environ.get("ADMIN_PASSWORD", "senha_padrao_secreta")
+    if senha != admin_pass:
+        raise HTTPException(status_code=403, detail="Acesso Negado: Senha Incorreta.")
+        
+    if not file.filename.endswith('.zip'):
+        raise HTTPException(status_code=400, detail="O cérebro deve ser um arquivo .zip")
+
+    current_gen = state["adaptation"]["generation"]
+    new_gen = current_gen + 1
+    new_path = f"models/sniper_pro_gen_{new_gen}.zip"
+    
+    # Salva e substitui o modelo
+    with open(new_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    # Recarrega o modelo na memória do Render em tempo real
+    state["status"] = "🧠 ATUALIZANDO REDE NEURAL..."
+    load_brain(new_path)
+    
+    # Reseta a memória de curto prazo (LSTM) para evitar conflitos com o novo cérebro
+    global lstm_states, episode_starts
+    lstm_states = None 
+    episode_starts = np.ones((1,), dtype=bool)
+    
+    state["adaptation"]["generation"] = new_gen
+    state["adaptation"]["learning_state"] = f"GEN {new_gen} ATIVA E OPERANTE"
+    
+    # Arquiva o CSV antigo para começar uma nova coleta limpa
+    if os.path.exists(DATA_PATH):
+        os.rename(DATA_PATH, f"data/archive_gen_{current_gen}.csv")
+        
+    return {"mensagem": f"Protocolo Apocalipse: Geração {new_gen} instalada com sucesso!"}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
