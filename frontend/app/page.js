@@ -1,16 +1,140 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-// 1. IMPORTAÇÕES DA V5: CandlestickSeries e createSeriesMarkers
 import { createChart, ColorType, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts'; 
-import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin } from 'lucide-react';
+import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database } from 'lucide-react';
 
+// ==========================================
+// 🧬 COMPONENTE: DOJO (PROTOCOLO APOCALIPSE)
+// ==========================================
+function DojoPanel({ state }) {
+  const [senha, setSenha] = useState('');
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [mensagem, setMensagem] = useState('');
+
+  // Converte a URL do WebSocket para a URL da API HTTP (Render)
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000/ws";
+  const API_URL = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').replace('/ws', '');
+
+  const handleDownload = () => {
+    if (!senha) { setMensagem('⚠️ Digite a senha Admin primeiro.'); return; }
+    window.open(`${API_URL}/download-dados?senha=${senha}`, '_blank');
+    setMensagem('📥 Solicitando download do histórico...');
+  };
+
+  const handleUpload = async () => {
+    if (!senha) { setMensagem('⚠️ Digite a senha Admin.'); return; }
+    if (!file) { setMensagem('⚠️ Selecione o arquivo .zip do Novo Cérebro.'); return; }
+
+    setLoading(true);
+    setMensagem('🚀 Injetando nova Geração na Matrix...');
+    
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${API_URL}/upload-cerebro?senha=${senha}`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      
+      if (res.ok) {
+        setMensagem(`✅ ${data.mensagem}`);
+        setFile(null);
+      } else {
+        setMensagem(`❌ Erro: ${data.detail}`);
+      }
+    } catch (err) {
+      setMensagem('❌ Erro de conexão com o servidor da Nuvem.');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="bg-slate-800/50 p-6 rounded-xl border border-purple-500/30 shadow-lg shadow-purple-900/20 mt-6">
+      <h2 className="text-xl font-bold text-purple-400 mb-4 flex items-center gap-2 border-b border-purple-900/50 pb-3">
+        <Brain size={24} /> Laboratório Neural (Dojo)
+      </h2>
+      
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* COLUNA 1: AUTENTICAÇÃO */}
+        <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+          <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-2">
+            <Key size={14} className="text-yellow-500"/> Chave de Autorização
+          </label>
+          <input 
+            type="password" 
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-white focus:outline-none focus:border-purple-500 transition-colors font-mono text-sm"
+            placeholder="••••••••"
+          />
+          {mensagem && (
+            <div className={`p-2 rounded text-xs font-mono text-center border ${mensagem.includes('✅') ? 'bg-green-900/30 border-green-500 text-green-400' : 'bg-red-900/30 border-red-500 text-red-400'}`}>
+              {mensagem}
+            </div>
+          )}
+        </div>
+
+        {/* COLUNA 2: EXTRAÇÃO (DOWNLOAD) */}
+        <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between">
+          <div>
+            <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-2 mb-2">
+              <Database size={14} className="text-blue-500"/> Coleta de Dados
+            </label>
+            <p className="text-xs text-slate-500 mb-2">
+              Baixe o histórico do mercado para treinar a IA no seu PC local. 
+              Tempo recomendado: <strong className="text-yellow-400">24h+</strong>
+            </p>
+          </div>
+          <button 
+            onClick={handleDownload}
+            className="w-full bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/50 font-semibold py-2 px-4 rounded transition-all flex justify-center items-center gap-2 text-sm"
+          >
+            <Download size={16}/> Exportar Conhecimento (CSV)
+          </button>
+        </div>
+
+        {/* COLUNA 3: INJEÇÃO (UPLOAD) */}
+        <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between">
+          <div>
+            <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-2 mb-2">
+              <Upload size={14} className="text-purple-500"/> Atualização Neural
+            </label>
+            <input 
+              type="file" 
+              accept=".zip"
+              onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)}
+              className="block w-full text-xs text-slate-400 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-purple-600/20 file:text-purple-400 hover:file:bg-purple-600/40 cursor-pointer mb-2"
+            />
+          </div>
+          <button 
+            onClick={handleUpload}
+            disabled={loading || !file}
+            className={`w-full font-bold py-2 px-4 rounded transition-all flex justify-center items-center gap-2 text-sm ${
+              loading || !file 
+              ? 'bg-slate-700 text-slate-500 cursor-not-allowed border border-slate-600' 
+              : 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/30'
+            }`}
+          >
+            <Zap size={16}/> {loading ? 'Injetando...' : 'Aplicar Geração'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 📊 DASHBOARD PRINCIPAL
+// ==========================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const chartContainerRef = useRef(null);
   const chartInstance = useRef(null);
   const seriesInstance = useRef(null);
-  // 2. NOVO REF PARA CONTROLAR O PLUGIN DE SETAS
   const markersPluginInstance = useRef(null); 
   const ws = useRef(null);
 
@@ -29,7 +153,6 @@ export default function Dashboard() {
           } catch (e) {}
         }
         
-        // 3. ATUALIZANDO AS SETAS VIA PLUGIN (V5)
         if (message.markers && message.markers.length > 0 && markersPluginInstance.current) {
           try {
             const sortedMarkers = [...message.markers].sort((a, b) => a.time - b.time);
@@ -57,12 +180,10 @@ export default function Dashboard() {
       rightPriceScale: { borderColor: '#334155' },
     });
 
-    // 4. CRIAÇÃO DA VELA NO FORMATO V5
     const newSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#22c55e', downColor: '#ef4444', borderUpColor: '#22c55e', borderDownColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444',
     });
 
-    // 5. INICIALIZA O PLUGIN DE MARCADORES E CONECTA NA VELA
     const markersPlugin = createSeriesMarkers(newSeries, []);
     markersPluginInstance.current = markersPlugin;
 
@@ -71,12 +192,10 @@ export default function Dashboard() {
       const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
       newSeries.setData(unique);
       
-      // Carrega as setas históricas no primeiro render da página
       if (data.markers && data.markers.length > 0) {
         const sortedMarkers = [...data.markers].sort((a, b) => a.time - b.time);
         markersPlugin.setMarkers(sortedMarkers);
       }
-
       chart.timeScale().fitContent();
     } catch (e) {
       console.error("Erro na renderização inicial:", e);
@@ -128,7 +247,6 @@ export default function Dashboard() {
 
       {/* CARDS DE INFORMAÇÃO */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-         
          <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 flex flex-col justify-between shadow-lg">
             <div className="flex justify-between items-start mb-2">
               <div className="text-slate-400 text-sm font-semibold flex items-center gap-2"><Bitcoin size={16} className="text-orange-500"/> Ativo Operacional</div>
@@ -169,11 +287,10 @@ export default function Dashboard() {
          </div>
       </div>
 
-      {/* ÁREA PRINCIPAL */}
+      {/* ÁREA PRINCIPAL: GRÁFICO E LIVRO DE OFERTAS */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg flex flex-col">
-           <div ref={chartContainerRef} className="w-full relative rounded overflow-hidden" style={{ height: '450px' }}>
-           </div>
+           <div ref={chartContainerRef} className="w-full relative rounded overflow-hidden" style={{ height: '450px' }}></div>
         </div>
 
         <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-[482px] flex flex-col shadow-lg">
@@ -198,6 +315,10 @@ export default function Dashboard() {
            </div>
         </div>
       </div>
+
+      {/* NOVO: PAINEL DE CONTROLE HÍBRIDO */}
+      <DojoPanel state={data} />
+
     </div>
   );
 }
