@@ -50,7 +50,9 @@ state = {
         "learning_state": "OBSERVANDO",
         "initial_win_rate": 0.0,
         "current_win_rate": 0.0,
-        "trades_analyzed": 0
+        "trades_analyzed": 0,
+        "wins": 0,      
+        "losses": 0     
     }
 }
 
@@ -279,6 +281,8 @@ async def sniper_loop():
                             state["adaptation"]["trades_analyzed"] += 1
                             if pnl > 0: wins += 1
                             else: losses += 1
+                            state["adaptation"]["wins"] = wins     
+                            state["adaptation"]["losses"] = losses 
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
 
                             #if state["adaptation"]["trades_analyzed"] % 3 == 0 and not is_training:
@@ -393,8 +397,15 @@ async def upload_cerebro(senha: str, file: UploadFile = File(...)):
     lstm_states = None 
     episode_starts = np.ones((1,), dtype=bool)
     
+    wins = 0
+    losses = 0
+    state["adaptation"]["wins"] = 0
+    state["adaptation"]["losses"] = 0
+    state["adaptation"]["current_win_rate"] = 0.0
+    state["adaptation"]["initial_win_rate"] = 0.0
+    state["adaptation"]["trades_analyzed"] = 0
+    
     state["adaptation"]["generation"] = new_gen
-    state["adaptation"]["learning_state"] = f"GEN {new_gen} ATIVA E OPERANTE"
     
     # Arquiva o CSV antigo para começar uma nova coleta limpa
     if os.path.exists(DATA_PATH):

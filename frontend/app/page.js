@@ -283,7 +283,10 @@ export default function Dashboard() {
             <div className="flex items-end gap-3 z-10 relative mt-2">
               <div className="text-3xl font-black font-mono text-white">Gen {data.adaptation.generation}</div>
               <div className="text-xs font-mono text-green-400 flex items-center pb-1 bg-green-900/30 px-2 rounded">
-                Win Rate: {data.adaptation.initial_win_rate}% ➔ {data.adaptation.current_win_rate}%
+                Win Rate: {data.adaptation.current_win_rate}% 
+                <span className="text-slate-400 ml-2">
+                  ({data.adaptation.wins || 0}W / {data.adaptation.losses || 0}L)
+                </span>
               </div>
             </div>
             <div className="text-xs text-purple-400/70 mt-2 z-10 relative font-mono uppercase tracking-wider">
