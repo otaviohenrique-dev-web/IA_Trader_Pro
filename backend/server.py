@@ -309,7 +309,7 @@ async def sniper_loop():
                     elif not warming_up and act_idx == 0:
                         state["status"] = "PROCURANDO OPORTUNIDADE"
 
-            clean_history = [{"time": int(r[0]/1000), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4])} for r in ohlcv[-100:]]
+            clean_history = [{"time": int(r[0]/1000), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4])} for r in ohlcv[-1000:]]
             state["chart_data"] = clean_history
             state["last_candle"] = clean_history[-1]
             state["uptime"] = get_uptime()

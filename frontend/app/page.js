@@ -176,7 +176,12 @@ export default function Dashboard() {
       grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
       width: chartContainerRef.current.clientWidth,
       height: 400,
-      timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#334155' },
+      timeScale: { 
+        timeVisible: true, 
+        secondsVisible: false, 
+        borderColor: '#334155',
+        shiftVisibleRangeOnNewBar: false, // 🛑 DESLIGA O "ÍMÃ" DO ZOOM
+      },
       rightPriceScale: { borderColor: '#334155' },
     });
 
