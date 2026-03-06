@@ -137,6 +137,9 @@ export default function Dashboard() {
   const seriesInstance = useRef(null);
   const markersPluginInstance = useRef(null); 
   const ws = useRef(null);
+  
+  // 🛑 A TRAVA MÁGICA CONTRA O RESET DO ZOOM
+  const isDataLoaded = useRef(false); 
 
   useEffect(() => {
     const socketUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000/ws";
@@ -144,22 +147,32 @@ export default function Dashboard() {
     
     ws.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      setData(message);
+      setData(message); // Atualiza os textos da interface
 
-      if (seriesInstance.current) {
-        if (message.last_candle?.time) {
+      // INJEÇÃO DIRETA NO GRÁFICO (SEM RECRIAR)
+      if (seriesInstance.current && chartInstance.current) {
+        
+        // 1. CARGA INICIAL (Roda só a primeira vez na vida)
+        if (!isDataLoaded.current && message.chart_data && message.chart_data.length > 0) {
+          const sorted = [...message.chart_data].sort((a, b) => a.time - b.time);
+          const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
+          seriesInstance.current.setData(unique);
+          chartInstance.current.timeScale().fitContent(); // Ajusta o zoom inicial
+          isDataLoaded.current = true; // TRAVA O ZOOM!
+        } 
+        // 2. PING DE PREÇO REAL (Só altera o preço do canto direito)
+        else if (isDataLoaded.current && message.last_candle?.time) {
           try {
             seriesInstance.current.update(message.last_candle);
           } catch (e) {}
         }
         
+        // 3. SETAS DE OPERAÇÃO
         if (message.markers && message.markers.length > 0 && markersPluginInstance.current) {
           try {
             const sortedMarkers = [...message.markers].sort((a, b) => a.time - b.time);
             markersPluginInstance.current.setMarkers(sortedMarkers);
-          } catch (e) {
-            console.error("Erro ao desenhar marcadores:", e);
-          }
+          } catch (e) {}
         }
       }
     };
@@ -168,8 +181,8 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!chartContainerRef.current || !data || !data.chart_data || data.chart_data.length === 0) return;
-    if (chartInstance.current) return;
+    if (!chartContainerRef.current || !data || data.chart_data.length === 0) return;
+    if (chartInstance.current) return; // IMPEDE O REACT DE DESTRUIR O GRÁFICO
 
     const chart = createChart(chartContainerRef.current, {
       layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#94a3b8' },
@@ -180,7 +193,7 @@ export default function Dashboard() {
         timeVisible: true, 
         secondsVisible: false, 
         borderColor: '#334155',
-        shiftVisibleRangeOnNewBar: false, // 🛑 DESLIGA O "ÍMÃ" DO ZOOM
+        shiftVisibleRangeOnNewBar: false, // 🛑 DESLIGA O "ÍMÃ" DO TRADINGVIEW
       },
       rightPriceScale: { borderColor: '#334155' },
     });
@@ -191,23 +204,24 @@ export default function Dashboard() {
 
     const markersPlugin = createSeriesMarkers(newSeries, []);
     markersPluginInstance.current = markersPlugin;
-
-    try {
-      const sorted = [...data.chart_data].sort((a, b) => a.time - b.time);
-      const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
-      newSeries.setData(unique);
-      
-      if (data.markers && data.markers.length > 0) {
-        const sortedMarkers = [...data.markers].sort((a, b) => a.time - b.time);
-        markersPlugin.setMarkers(sortedMarkers);
-      }
-      chart.timeScale().fitContent();
-    } catch (e) {
-      console.error("Erro na renderização inicial:", e);
-    }
-
+    
+    // Liga as instâncias à memória
     chartInstance.current = chart;
     seriesInstance.current = newSeries;
+
+    // Se no momento de criar o quadro os dados já estiverem ali, injetamos:
+    if (!isDataLoaded.current && data.chart_data && data.chart_data.length > 0) {
+        const sorted = [...data.chart_data].sort((a, b) => a.time - b.time);
+        const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
+        newSeries.setData(unique);
+        
+        if (data.markers && data.markers.length > 0) {
+            const sortedMarkers = [...data.markers].sort((a, b) => a.time - b.time);
+            markersPlugin.setMarkers(sortedMarkers);
+        }
+        chart.timeScale().fitContent();
+        isDataLoaded.current = true;
+    }
 
     const handleResize = () => chart.applyOptions({ width: chartContainerRef.current.clientWidth });
     window.addEventListener('resize', handleResize);
@@ -218,8 +232,11 @@ export default function Dashboard() {
       chartInstance.current = null; 
       seriesInstance.current = null;
       markersPluginInstance.current = null;
+      isDataLoaded.current = false;
     };
-  }, [data]);
+  }, [data !== null]); // 🛑 O TRUQUE DE MESTRE: O [data !== null] FAZ ELE RODAR APENAS UMA VEZ
+  
+  // O resto do código continua igual a partir do "if (!data) return..."
 
   if (!data) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
