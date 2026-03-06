@@ -190,7 +190,8 @@ async def sniper_loop():
     warming_up = True 
     warmup_counter = 0
     consecutive_signals = 0 
-    last_signal = 0         
+    last_signal = 0   
+    last_trade_ts = 0      
 
     while True:
         try:
@@ -266,6 +267,11 @@ async def sniper_loop():
                         else:
                             state["status"] = f"🔍 VALIDANDO {'LONG' if act_idx == 1 else 'SHORT'}... ({consecutive_signals}/3)"
 
+                    # 🛑 TRAVA DE METRALHADORA: Impede overtrading na mesma vela
+                    if target_pos != 0 and position == 0 and current_ts == last_trade_ts:
+                        target_pos = 0 
+                        state["status"] = "⏳ AGUARDANDO NOVA VELA PARA OPERAR..."
+
                     if target_pos != position:
                         if position != 0:
                             change_pct = (current_price - entry_price) / entry_price
@@ -281,13 +287,11 @@ async def sniper_loop():
                             state["adaptation"]["trades_analyzed"] += 1
                             if pnl > 0: wins += 1
                             else: losses += 1
-                            state["adaptation"]["wins"] = wins     
-                            state["adaptation"]["losses"] = losses 
+                            state["adaptation"]["wins"] = wins
+                            state["adaptation"]["losses"] = losses
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
 
-                            #if state["adaptation"]["trades_analyzed"] % 3 == 0 and not is_training:
-                            #   asyncio.create_task(evolve_apocalypse())
-                            pass # Evolução Automática Pausada (Modo Híbrido)
+                            last_trade_ts = current_ts # 👈 REGISTRA O HORÁRIO DA AÇÃO
 
                         if target_pos != 0:
                             fee = balance * FEE_RATE; balance -= fee
@@ -301,11 +305,11 @@ async def sniper_loop():
 
                             state["order_book"].insert(0, {"text": f"[{horario}] 🚀 ABRIU {label} em ${current_price:.2f}"})
                             state["in_position"] = True
+                            last_trade_ts = current_ts # 👈 REGISTRA O HORÁRIO DA AÇÃO
                         else:
                             state["in_position"] = False
 
                         position = target_pos
-
                     if not warming_up and position != 0:
                         change = (current_price - entry_price) / entry_price
                         unrealized = (balance * change) if position == 1 else (balance * -change)
@@ -393,7 +397,7 @@ async def upload_cerebro(senha: str, file: UploadFile = File(...)):
     load_brain(new_path)
     
     # Reseta a memória de curto prazo (LSTM) para evitar conflitos com o novo cérebro
-    global lstm_states, episode_starts
+    global lstm_states, episode_starts, wins, losses
     lstm_states = None 
     episode_starts = np.ones((1,), dtype=bool)
     
