@@ -265,7 +265,7 @@ async def sniper_loop():
                         else: consecutive_signals = 0; last_signal = 0
 
                         if act_idx == 0: target_pos = 0
-                        elif consecutive_signals >= 3:
+                        elif consecutive_signals >= 1:
                             target_pos = 1 if act_idx == 1 else -1
                             consecutive_signals = 0 
                         else:

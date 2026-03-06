@@ -147,20 +147,42 @@ export default function Dashboard() {
     
     ws.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      setData(message); // Atualiza os textos da interface
+      setData(message);
 
-      // INJEÇÃO DIRETA NO GRÁFICO (SEM RECRIAR)
       if (seriesInstance.current && chartInstance.current) {
         
-        // 1. CARGA INICIAL (Roda só a primeira vez na vida)
-        if (!isDataLoaded.current && message.chart_data && message.chart_data.length > 0) {
+        // --- 🛡️ GESTÃO DA LINHA DE ENTRADA (CORRIGIDA) ---
+        // Se estiver em posição, gerencia a linha
+        if (message.in_position && message.entry_price) {
+          // Se a linha ainda não existir, cria
+          if (!priceLineRef.current) {
+            priceLineRef.current = seriesInstance.current.createPriceLine({
+              price: message.entry_price,
+              color: message.position === 1 ? '#22c55e' : '#ef4444',
+              lineWidth: 2,
+              lineStyle: 2,
+              axisLabelVisible: true,
+              title: 'ENTRADA',
+            });
+          }
+        } else {
+          // Se NÃO estiver em posição mas a linha existir, remove
+          if (priceLineRef.current) {
+            seriesInstance.current.removePriceLine(priceLineRef.current);
+            priceLineRef.current = null;
+          }
+        }
+        // -----------------------------------------------
+
+        // 1. CARGA INICIAL
+        if (!isDataLoaded.current && message.chart_data?.length > 0) {
           const sorted = [...message.chart_data].sort((a, b) => a.time - b.time);
           const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
           seriesInstance.current.setData(unique);
-          chartInstance.current.timeScale().fitContent(); // Ajusta o zoom inicial
-          isDataLoaded.current = true; // TRAVA O ZOOM!
+          chartInstance.current.timeScale().fitContent();
+          isDataLoaded.current = true;
         } 
-        // 2. PING DE PREÇO REAL (Só altera o preço do canto direito)
+        // 2. PING DE PREÇO REAL
         else if (isDataLoaded.current && message.last_candle?.time) {
           try {
             seriesInstance.current.update(message.last_candle);
@@ -168,7 +190,7 @@ export default function Dashboard() {
         }
         
         // 3. SETAS DE OPERAÇÃO
-        if (message.markers && message.markers.length > 0 && markersPluginInstance.current) {
+        if (message.markers?.length > 0 && markersPluginInstance.current) {
           try {
             const sortedMarkers = [...message.markers].sort((a, b) => a.time - b.time);
             markersPluginInstance.current.setMarkers(sortedMarkers);
