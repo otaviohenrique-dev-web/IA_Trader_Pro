@@ -27,6 +27,10 @@ DATA_PATH = "data/live_market_data.csv"
 START_TIME = time.time()
 FEE_RATE = 0.0005 
 
+# VARIÁVEIS DE GESTÃO DE RISCO 
+STOP_LOSS_PCT = -0.010   # Corta a perda em -1%
+TAKE_PROFIT_PCT = +0.020 # Coloca no bolso em +2%
+
 # --- VARIÁVEIS DO SIMULADOR ---
 balance = 100.00
 position = 0 
@@ -266,6 +270,25 @@ async def sniper_loop():
                             consecutive_signals = 0 
                         else:
                             state["status"] = f"🔍 VALIDANDO {'LONG' if act_idx == 1 else 'SHORT'}... ({consecutive_signals}/3)"
+                    
+                    #  🛡️ GESTÃO DE RISCO: O CÃO DE GUARDA 
+                    if not warming_up and position != 0:
+                        # Calcula a porcentagem real do movimento
+                        change_pct = (current_price - entry_price) / entry_price
+                        unrealized_pct = change_pct if position == 1 else -change_pct
+                        
+                        # Se o prejuízo bater no limite de Risco (-1%)
+                        if unrealized_pct <= STOP_LOSS_PCT:
+                            target_pos = 0  # 🛑 Sobrescreve a IA e força o fechamento
+                            horario_log = datetime.now().strftime("%H:%M:%S")
+                            state["order_book"].insert(0, {"text": f"[{horario_log}] 🛡️ STOP LOSS ACIONADO ({unrealized_pct*100:.2f}%)"})
+                            
+                        # Se o lucro bater na meta de Retorno (+2%)
+                        elif unrealized_pct >= TAKE_PROFIT_PCT:
+                            target_pos = 0  # 🎯 Sobrescreve a IA e força o fechamento
+                            horario_log = datetime.now().strftime("%H:%M:%S")
+                            state["order_book"].insert(0, {"text": f"[{horario_log}] 🎯 TAKE PROFIT ATINGIDO ({unrealized_pct*100:.2f}%)"})
+                    #  FIM DA GESTÃO DE RISCO 
 
                     # 🛑 TRAVA DE METRALHADORA: Impede overtrading na mesma vela
                     if target_pos != 0 and position == 0 and current_ts == last_trade_ts:
