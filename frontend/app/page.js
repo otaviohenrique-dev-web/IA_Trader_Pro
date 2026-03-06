@@ -137,7 +137,9 @@ export default function Dashboard() {
   const seriesInstance = useRef(null);
   const markersPluginInstance = useRef(null); 
   const ws = useRef(null);
-  
+
+  const priceLineRef = useRef(null);
+
   // 🛑 A TRAVA MÁGICA CONTRA O RESET DO ZOOM
   const isDataLoaded = useRef(false); 
 
@@ -158,7 +160,7 @@ export default function Dashboard() {
           if (!priceLineRef.current) {
             priceLineRef.current = seriesInstance.current.createPriceLine({
               price: message.entry_price,
-              color: message.position === 1 ? '#22c55e' : '#ef4444',
+              color: message.current_position === 1 ? '#22c55e' : '#ef4444',
               lineWidth: 2,
               lineStyle: 2,
               axisLabelVisible: true,

@@ -42,6 +42,8 @@ state = {
     "asset": SYMBOL,
     "is_online": True,
     "in_position": False,
+    "entry_price": 0.0,
+    "current_position": 0,
     "balance": balance, 
     "status": "INICIANDO MOTORES...",
     "uptime": "00:00:00",
@@ -313,8 +315,10 @@ async def sniper_loop():
                             state["adaptation"]["wins"] = wins
                             state["adaptation"]["losses"] = losses
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
-
-                            last_trade_ts = current_ts # 👈 REGISTRA O HORÁRIO DA AÇÃO
+                            
+                            last_trade_ts = current_ts 
+                            state["entry_price"] = 0.0         
+                            state["current_position"] = 0    
 
                         if target_pos != 0:
                             fee = balance * FEE_RATE; balance -= fee
@@ -328,9 +332,14 @@ async def sniper_loop():
 
                             state["order_book"].insert(0, {"text": f"[{horario}] 🚀 ABRIU {label} em ${current_price:.2f}"})
                             state["in_position"] = True
-                            last_trade_ts = current_ts # 👈 REGISTRA O HORÁRIO DA AÇÃO
+                            state["entry_price"] = entry_price       #  AVISA O FRONT ONDE ENTROU
+                            state["current_position"] = target_pos   #  AVISA SE É LONG (1) OU SHORT (-1)
+                            last_trade_ts = current_ts
+
                         else:
                             state["in_position"] = False
+                            state["entry_price"] = 0.0         #  ZERA O PREÇO NO FRONTEND
+                            state["current_position"] = 0      #  ZERA A POSIÇÃO NO FRONTEND
 
                         position = target_pos
                     if not warming_up and position != 0:
