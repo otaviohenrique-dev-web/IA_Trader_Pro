@@ -6,13 +6,12 @@ from sb3_contrib import RecurrentPPO
 from envs.trading_env import BitcoinTradingEnv
 
 # --- CONFIGURAÇÕES DO DOJO ---
-# Coloque o CSV que você baixar da Vercel dentro da pasta 'backend/data' e renomeie para:
-DADOS_BAIXADOS = "data/mercado_real_20260306.csv" 
+# Lembre-se de baixar o CSV do Dashboard e salvar na pasta data com este nome:
+DADOS_BAIXADOS = "data/mercado_real_20260309.csv"
 
-# O caminho do cérebro atual (sem o "backend/" no início, pois já estamos nele):
-MODELO_ATUAL = "models/sniper_pro_finished.zip" 
-
-PASSOS_DE_TREINO = 25000
+# 👇 O treino agora parte da Gen 2 (a que está no ar)!
+MODELO_ATUAL = "models/sniper_pro_gen_2.zip" 
+PASSOS_DE_TREINO = 30000 # Aumentei um pouco para aprofundar a Gestão de Risco
 
 def preparar_dados(caminho_csv):
     print("🧹 Engenharia de Features nos dados reais...")
@@ -40,10 +39,10 @@ def preparar_dados(caminho_csv):
     return df.dropna().copy()
 
 if __name__ == "__main__":
-    print("🥋 BEM-VINDO AO DOJO DE TREINAMENTO LOCAL 🥋")
+    print("🥋 BEM-VINDO AO DOJO DE TREINAMENTO INSTITUCIONAL 🥋")
     
     if not os.path.exists(DADOS_BAIXADOS):
-        print(f"❌ Arquivo {DADOS_BAIXADOS} não encontrado. Faça o download primeiro!")
+        print(f"❌ Arquivo {DADOS_BAIXADOS} não encontrado. Exporte da Vercel primeiro!")
         exit()
 
     df_treino = preparar_dados(DADOS_BAIXADOS)
@@ -52,10 +51,10 @@ if __name__ == "__main__":
     print(f"🧠 Carregando Cérebro Base: {MODELO_ATUAL}")
     model = RecurrentPPO.load(MODELO_ATUAL, env=env, device="cpu")
     
-    print(f"🔥 Iniciando Treinamento Pesado ({PASSOS_DE_TREINO} steps)...")
+    print(f"🔥 Iniciando Treinamento com Gestão de Risco Ativada ({PASSOS_DE_TREINO} steps)...")
     model.learn(total_timesteps=PASSOS_DE_TREINO)
     
-    novo_nome = "sniper_pro_gen_NOVA.zip"
+    novo_nome = "models/sniper_pro_gen_3.zip"
     model.save(novo_nome)
     print(f"🏆 Treinamento Concluído! Novo modelo salvo como: {novo_nome}")
-    print(">>> Suba este arquivo no Dashboard da Vercel para atualizar o bot!")
+    print(">>> Suba este arquivo no Dashboard da Vercel para injetar a Gen 3!")

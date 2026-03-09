@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 # --- CONFIGURAÇÕES DO APOCALIPSE ---
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '5m'
-MODEL_PATH = "models/sniper_pro_gen_2.zip" 
+MODEL_PATH = "models/sniper_pro_gen_3.zip" 
 DATA_PATH = "data/live_market_data.csv"
 START_TIME = time.time()
 FEE_RATE = 0.0005 
