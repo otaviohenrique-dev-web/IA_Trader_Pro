@@ -135,6 +135,7 @@ export default function Dashboard() {
   const chartContainerRef = useRef(null);
   const chartInstance = useRef(null);
   const seriesInstance = useRef(null);
+  const tradeSeriesInstance = useRef(null);
   const markersPluginInstance = useRef(null); 
   const ws = useRef(null);
 
@@ -153,10 +154,8 @@ export default function Dashboard() {
 
       if (seriesInstance.current && chartInstance.current) {
         
-        // --- 🛡️ GESTÃO DA LINHA DE ENTRADA (CORRIGIDA) ---
-        // Se estiver em posição, gerencia a linha
+        // --- 🛡️ GESTÃO DA LINHA DE ENTRADA ATUAL ---
         if (message.in_position && message.entry_price) {
-          // Se a linha ainda não existir, cria
           if (!priceLineRef.current) {
             priceLineRef.current = seriesInstance.current.createPriceLine({
               price: message.entry_price,
@@ -168,7 +167,6 @@ export default function Dashboard() {
             });
           }
         } else {
-          // Se NÃO estiver em posição mas a linha existir, remove
           if (priceLineRef.current) {
             seriesInstance.current.removePriceLine(priceLineRef.current);
             priceLineRef.current = null;
@@ -181,6 +179,12 @@ export default function Dashboard() {
           const sorted = [...message.chart_data].sort((a, b) => a.time - b.time);
           const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
           seriesInstance.current.setData(unique);
+          
+          // Injeta o histórico de rastros (Efeito IQ Option)
+          if (message.trade_lines && message.trade_lines.length > 0 && tradeSeriesInstance.current) {
+            tradeSeriesInstance.current.setData(message.trade_lines);
+          }
+          
           chartInstance.current.timeScale().fitContent();
           isDataLoaded.current = true;
         } 
@@ -188,6 +192,11 @@ export default function Dashboard() {
         else if (isDataLoaded.current && message.last_candle?.time) {
           try {
             seriesInstance.current.update(message.last_candle);
+            
+            // Atualiza o rastro histórico (Efeito IQ Option) em tempo real
+            if (message.trade_lines && message.trade_lines.length > 0 && tradeSeriesInstance.current) {
+              tradeSeriesInstance.current.update(message.trade_lines[message.trade_lines.length - 1]);
+            }
           } catch (e) {}
         }
         
@@ -215,7 +224,7 @@ export default function Dashboard() {
       height: 400,
       timeScale: { 
         timeVisible: true, 
-        secondsVisible: false, 
+        secondsVisible: false,
         borderColor: '#334155',
         shiftVisibleRangeOnNewBar: false, // 🛑 DESLIGA O "ÍMÃ" DO TRADINGVIEW
       },
@@ -225,6 +234,17 @@ export default function Dashboard() {
     const newSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#22c55e', downColor: '#ef4444', borderUpColor: '#22c55e', borderDownColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444',
     });
+
+    // 👇 NOVA SÉRIE: O Rastro Histórico da IQ Option 👇
+    const tradeSeries = chart.addLineSeries({
+      color: '#3b82f6', // Azul elétrico
+      lineWidth: 2,
+      lineStyle: 2, // Tracejado
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    tradeSeriesInstance.current = tradeSeries;
 
     const markersPlugin = createSeriesMarkers(newSeries, []);
     markersPluginInstance.current = markersPlugin;
@@ -238,6 +258,10 @@ export default function Dashboard() {
         const sorted = [...data.chart_data].sort((a, b) => a.time - b.time);
         const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
         newSeries.setData(unique);
+        
+        if (data.trade_lines && data.trade_lines.length > 0) {
+            tradeSeries.setData(data.trade_lines);
+        }
         
         if (data.markers && data.markers.length > 0) {
             const sortedMarkers = [...data.markers].sort((a, b) => a.time - b.time);
@@ -255,12 +279,11 @@ export default function Dashboard() {
       chart.remove(); 
       chartInstance.current = null; 
       seriesInstance.current = null;
+      tradeSeriesInstance.current = null;
       markersPluginInstance.current = null;
       isDataLoaded.current = false;
     };
-  }, [data !== null]); // 🛑 O TRUQUE DE MESTRE: O [data !== null] FAZ ELE RODAR APENAS UMA VEZ
-  
-  // O resto do código continua igual a partir do "if (!data) return..."
+  }, [data !== null]); 
 
   if (!data) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">

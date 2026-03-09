@@ -29,7 +29,7 @@ FEE_RATE = 0.0005
 
 # VARIÁVEIS DE GESTÃO DE RISCO 
 STOP_LOSS_PCT = -0.010   # Corta a perda em -1%
-TAKE_PROFIT_PCT = +0.020 # Coloca no bolso em +2%
+TAKE_PROFIT_PCT = +0.020 # Coloca no bolso em +2% (Usado apenas se a dinâmica não pegar)
 
 # --- VARIÁVEIS DO SIMULADOR ---
 balance = 100.00
@@ -37,6 +37,7 @@ position = 0
 entry_price = 0.0
 wins = 0
 losses = 0
+max_profit_pct = 0.0  # 👈 MEMÓRIA DO PICO DE LUCRO (Gestão Dinâmica)
 
 state = {
     "asset": SYMBOL,
@@ -45,6 +46,7 @@ state = {
     "entry_price": 0.0,
     "current_position": 0,
     "balance": balance, 
+    "trade_lines": [], # 👈 Rastro do Efeito IQ Option
     "status": "INICIANDO MOTORES...",
     "uptime": "00:00:00",
     "last_candle": {},
@@ -186,7 +188,7 @@ def get_uptime():
 
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, is_training
-    global balance, position, entry_price, wins, losses
+    global balance, position, entry_price, wins, losses, max_profit_pct
     
     exchange = ccxt.binanceus({'enableRateLimit': True})
     print(f">>> 🚀 CONECTADO AO MERCADO REAL (BINANCE US). AGUARDANDO ALVOS...")
@@ -273,24 +275,36 @@ async def sniper_loop():
                         else:
                             state["status"] = f"🔍 VALIDANDO {'LONG' if act_idx == 1 else 'SHORT'}... ({consecutive_signals}/3)"
                     
-                    #  🛡️ GESTÃO DE RISCO: O CÃO DE GUARDA 
+                    # 👇 🛡️ GESTÃO DE RISCO DINÂMICA (TRAILING STOP & BREAKEVEN) 👇
                     if not warming_up and position != 0:
-                        # Calcula a porcentagem real do movimento
                         change_pct = (current_price - entry_price) / entry_price
                         unrealized_pct = change_pct if position == 1 else -change_pct
                         
-                        # Se o prejuízo bater no limite de Risco (-1%)
-                        if unrealized_pct <= STOP_LOSS_PCT:
-                            target_pos = 0  # 🛑 Sobrescreve a IA e força o fechamento
+                        # Atualiza o pico de lucro da operação atual
+                        if unrealized_pct > max_profit_pct:
+                            max_profit_pct = unrealized_pct
+
+                        # LÓGICA DO STOP MÓVEL
+                        dynamic_stop = STOP_LOSS_PCT # Começa no Stop original (ex: -1%)
+                        stop_type = "STOP LOSS"
+
+                        # Nível 2: Trailing Stop (Deixa o lucro correr, seguindo 0.6% atrás do pico)
+                        if max_profit_pct >= 0.015: 
+                            dynamic_stop = max_profit_pct - 0.006
+                            stop_type = "TRAILING STOP"
+                        
+                        # Nível 1: Breakeven (Se bateu 0.8% de lucro, garante 0.2% no bolso + taxas)
+                        elif max_profit_pct >= 0.008:
+                            dynamic_stop = 0.002
+                            stop_type = "BREAKEVEN"
+
+                        # Executa a guilhotina se o preço cair abaixo da linha dinâmica atual
+                        if unrealized_pct <= dynamic_stop:
+                            target_pos = 0  # 🛑 Força o fechamento
                             horario_log = datetime.now().strftime("%H:%M:%S")
-                            state["order_book"].insert(0, {"text": f"[{horario_log}] 🛡️ STOP LOSS ACIONADO ({unrealized_pct*100:.2f}%)"})
-                            
-                        # Se o lucro bater na meta de Retorno (+2%)
-                        elif unrealized_pct >= TAKE_PROFIT_PCT:
-                            target_pos = 0  # 🎯 Sobrescreve a IA e força o fechamento
-                            horario_log = datetime.now().strftime("%H:%M:%S")
-                            state["order_book"].insert(0, {"text": f"[{horario_log}] 🎯 TAKE PROFIT ATINGIDO ({unrealized_pct*100:.2f}%)"})
-                    #  FIM DA GESTÃO DE RISCO 
+                            cor_log = "🎯" if dynamic_stop > 0 else "🛡️"
+                            state["order_book"].insert(0, {"text": f"[{horario_log}] {cor_log} {stop_type} ACIONADO ({unrealized_pct*100:.2f}%)"})
+                    # 👆 FIM DA GESTÃO DE RISCO DINÂMICA 👆
 
                     # 🛑 TRAVA DE METRALHADORA: Impede overtrading na mesma vela
                     if target_pos != 0 and position == 0 and current_ts == last_trade_ts:
@@ -324,10 +338,10 @@ async def sniper_loop():
                             fee = balance * FEE_RATE; balance -= fee
                             entry_price = current_price
                             if target_pos == 1:
-                                state["markers"].append({"time": current_ts, "position": "belowBar", "color": "#22c55e", "shape": "arrowUp", "text": "LONG"})
+                                state["markers"].append({"time": current_ts, "position": "belowBar", "color": "#22c55e", "shape": "arrowUp", "text": f"LONG @ ${current_price:.2f}"})
                                 label = "LONG 🟢"
                             else:
-                                state["markers"].append({"time": current_ts, "position": "aboveBar", "color": "#ef4444", "shape": "arrowDown", "text": "SHORT"})
+                                state["markers"].append({"time": current_ts, "position": "aboveBar", "color": "#ef4444", "shape": "arrowDown", "text": f"SHORT @ ${current_price:.2f}"})
                                 label = "SHORT 🔴"
 
                             state["order_book"].insert(0, {"text": f"[{horario}] 🚀 ABRIU {label} em ${current_price:.2f}"})
@@ -335,6 +349,7 @@ async def sniper_loop():
                             state["entry_price"] = entry_price       #  AVISA O FRONT ONDE ENTROU
                             state["current_position"] = target_pos   #  AVISA SE É LONG (1) OU SHORT (-1)
                             last_trade_ts = current_ts
+                            max_profit_pct = 0.0   # 👈 ZERA O PICO PARA A NOVA OPERAÇÃO
 
                         else:
                             state["in_position"] = False
@@ -352,6 +367,25 @@ async def sniper_loop():
             clean_history = [{"time": int(r[0]/1000), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4])} for r in ohlcv[-1000:]]
             state["chart_data"] = clean_history
             state["last_candle"] = clean_history[-1]
+            
+            # 👇 EFEITO IQ OPTION: Desenhando o Rastro Histórico 👇
+            latest_time = clean_history[-1]["time"]
+            
+            # Remove o último ponto se for do mesmo candle (para atualizar em tempo real)
+            if len(state["trade_lines"]) > 0 and state["trade_lines"][-1]["time"] == latest_time:
+                state["trade_lines"].pop()
+                
+            if position != 0:
+                # Se estiver em operação, desenha a linha no preço exato de entrada
+                state["trade_lines"].append({"time": latest_time, "value": entry_price})
+            else:
+                # Se estiver fora, envia um "espaço em branco" para quebrar a linha
+                state["trade_lines"].append({"time": latest_time})
+                
+            # Mantém apenas os últimos 1000 rastros para não pesar a memória
+            state["trade_lines"] = state["trade_lines"][-1000:]
+            # 👆 FIM DO EFEITO IQ OPTION 👆
+
             state["uptime"] = get_uptime()
             state["markers"] = state["markers"][-50:]
             
