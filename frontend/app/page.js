@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { createChart, ColorType, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts'; 
+import { createChart, ColorType, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
 import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database } from 'lucide-react';
+
 
 // ==========================================
 // 🧬 COMPONENTE: DOJO (PROTOCOLO APOCALIPSE)
@@ -235,8 +236,8 @@ export default function Dashboard() {
       upColor: '#22c55e', downColor: '#ef4444', borderUpColor: '#22c55e', borderDownColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444',
     });
 
-    // 👇 NOVA SÉRIE: O Rastro Histórico da IQ Option 👇
-    const tradeSeries = chart.addLineSeries({
+   // 👇 NOVA SÉRIE: O Rastro Histórico da IQ Option 👇
+    const tradeSeries = chart.addSeries(LineSeries, {
       color: '#3b82f6', // Azul elétrico
       lineWidth: 2,
       lineStyle: 2, // Tracejado
