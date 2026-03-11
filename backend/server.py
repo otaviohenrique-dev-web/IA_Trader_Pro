@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 # --- CONFIGURAÇÕES DO APOCALIPSE ---
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '5m'
-MODEL_PATH = "models/sniper_pro_gen_3.zip" 
+MODEL_PATH = "models/sniper_pro_gen_4.zip" 
 DATA_PATH = "data/live_market_data.csv"
 START_TIME = time.time()
 FEE_RATE = 0.0005 
@@ -200,6 +200,7 @@ async def sniper_loop():
     consecutive_signals = 0 
     last_signal = 0   
     last_trade_ts = 0      
+    cooldown_until_ts = 0 
 
     while True:
         try:
@@ -269,12 +270,18 @@ async def sniper_loop():
                         else: consecutive_signals = 0; last_signal = 0
 
                         if act_idx == 0: target_pos = 0
-                        elif consecutive_signals >= 1:
+                        elif consecutive_signals >= 2: # 👈 MUDANÇA: Agora exige 2 velas de confirmação
                             target_pos = 1 if act_idx == 1 else -1
                             consecutive_signals = 0 
                         else:
-                            state["status"] = f"🔍 VALIDANDO {'LONG' if act_idx == 1 else 'SHORT'}... ({consecutive_signals}/3)"
-                    
+                            state["status"] = f"🔍 VALIDANDO {'LONG' if act_idx == 1 else 'SHORT'}... ({consecutive_signals}/2)"
+
+                        # 👇 NOVO: CÃO DE GUARDA DO COOLDOWN 👇
+                        # Se a IA quiser entrar, mas ainda estiver de castigo, bloqueamos a entrada
+                        if target_pos != 0 and position == 0 and current_ts < cooldown_until_ts:
+                            target_pos = 0
+                            min_restantes = int((cooldown_until_ts - current_ts) / 60)
+                            state["status"] = f"🧊 COOLDOWN: Evitando taxas. Retorno em {min_restantes} min..."
                     # 👇 🛡️ GESTÃO DE RISCO DINÂMICA (TRAILING STOP & BREAKEVEN) 👇
                     if not warming_up and position != 0:
                         change_pct = (current_price - entry_price) / entry_price
@@ -331,8 +338,9 @@ async def sniper_loop():
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
                             
                             last_trade_ts = current_ts 
+                            cooldown_until_ts = current_ts + 900 # 👈 NOVO: Aplica 15 minutos (3 velas) de descanso forçado
                             state["entry_price"] = 0.0         
-                            state["current_position"] = 0    
+                            state["current_position"] = 0   
 
                         if target_pos != 0:
                             fee = balance * FEE_RATE; balance -= fee
