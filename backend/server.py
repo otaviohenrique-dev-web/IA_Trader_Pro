@@ -38,6 +38,8 @@ entry_price = 0.0
 wins = 0
 losses = 0
 max_profit_pct = 0.0  # 👈 MEMÓRIA DO PICO DE LUCRO (Gestão Dinâmica)
+historical_lines = [] # 👈 NOVA: Guarda os vetores passados
+trade_entry_ts = 0    # 👈 NOVA: Lembra o momento exato da entrada
 
 state = {
     "asset": SYMBOL,
@@ -189,6 +191,7 @@ def get_uptime():
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, is_training
     global balance, position, entry_price, wins, losses, max_profit_pct
+    global historical_lines, trade_entry_ts # 👈 ADICIONE ESTA LINHA
     
     exchange = ccxt.binanceus({'enableRateLimit': True})
     print(f">>> 🚀 CONECTADO AO MERCADO REAL (BINANCE US). AGUARDANDO ALVOS...")
@@ -339,6 +342,12 @@ async def sniper_loop():
                             
                             last_trade_ts = current_ts 
                             cooldown_until_ts = current_ts + 900 # 👈 NOVO: Aplica 15 minutos (3 velas) de descanso forçado
+                            # 👇 GRAVA O PONTO B E QUEBRA A LINHA 👇
+                            if trade_entry_ts != 0 and current_ts > trade_entry_ts:
+                                historical_lines.append({"time": trade_entry_ts, "value": entry_price})
+                                historical_lines.append({"time": current_ts, "value": current_price})
+                                historical_lines.append({"time": current_ts + 1}) # Cria o espaço em branco (Quebra)
+                            # 👆 -------------------------------- 👆
                             state["entry_price"] = 0.0         
                             state["current_position"] = 0   
 
@@ -358,6 +367,7 @@ async def sniper_loop():
                             state["current_position"] = target_pos   #  AVISA SE É LONG (1) OU SHORT (-1)
                             last_trade_ts = current_ts
                             max_profit_pct = 0.0   # 👈 ZERA O PICO PARA A NOVA OPERAÇÃO
+                            trade_entry_ts = current_ts # 👈 GRAVA O PONTO A DO VETOR
 
                         else:
                             state["in_position"] = False
@@ -376,23 +386,18 @@ async def sniper_loop():
             state["chart_data"] = clean_history
             state["last_candle"] = clean_history[-1]
             
-            # 👇 EFEITO IQ OPTION: Desenhando o Rastro Histórico 👇
+           # 👇 NOVO EFEITO VETOR (Ponto A -> Ponto B) 👇
             latest_time = clean_history[-1]["time"]
+            current_lines = historical_lines.copy()
             
-            # Remove o último ponto se for do mesmo candle (para atualizar em tempo real)
-            if len(state["trade_lines"]) > 0 and state["trade_lines"][-1]["time"] == latest_time:
-                state["trade_lines"].pop()
-                
-            if position != 0:
-                # Se estiver em operação, desenha a linha no preço exato de entrada
-                state["trade_lines"].append({"time": latest_time, "value": entry_price})
-            else:
-                # Se estiver fora, envia um "espaço em branco" para quebrar a linha
-                state["trade_lines"].append({"time": latest_time})
-                
-            # Mantém apenas os últimos 1000 rastros para não pesar a memória
-            state["trade_lines"] = state["trade_lines"][-1000:]
-            # 👆 FIM DO EFEITO IQ OPTION 👆
+            if position != 0 and trade_entry_ts != 0:
+                # Traça a linha reta viva da entrada até o preço deste segundo
+                current_lines.append({"time": trade_entry_ts, "value": entry_price})
+                if latest_time > trade_entry_ts:
+                    current_lines.append({"time": latest_time, "value": current_price})
+                    
+            state["trade_lines"] = current_lines[-1000:]
+            # 👆 FIM DO EFEITO VETOR 👆
 
             state["uptime"] = get_uptime()
             state["markers"] = state["markers"][-50:]

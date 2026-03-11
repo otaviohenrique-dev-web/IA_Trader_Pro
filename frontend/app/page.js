@@ -194,9 +194,9 @@ export default function Dashboard() {
           try {
             seriesInstance.current.update(message.last_candle);
             
-            // Atualiza o rastro histórico (Efeito IQ Option) em tempo real
-            if (message.trade_lines && message.trade_lines.length > 0 && tradeSeriesInstance.current) {
-              tradeSeriesInstance.current.update(message.trade_lines[message.trade_lines.length - 1]);
+            // ATUALIZAÇÃO DO VETOR: Substitui a linha inteira para não bugar o desenho
+            if (message.trade_lines && tradeSeriesInstance.current) {
+              tradeSeriesInstance.current.setData(message.trade_lines); // 👈 Usa setData ao invés de update
             }
           } catch (e) {}
         }
