@@ -7,11 +7,14 @@ from envs.trading_env import BitcoinTradingEnv
 
 # --- CONFIGURAÇÕES DO DOJO ---
 # Lembre-se de baixar o CSV do Dashboard e salvar na pasta data com este nome:
-DADOS_BAIXADOS = "data/mercado_real_20260309.csv"
+DADOS_BAIXADOS = "data/mercado_real_20260313.csv"
 
-# 👇 O treino agora parte da Gen 2 (a que está no ar)!
-MODELO_ATUAL = "models/sniper_pro_gen_2.zip" 
-PASSOS_DE_TREINO = 30000 # Aumentei um pouco para aprofundar a Gestão de Risco
+# 👇 O treino agora parte da Gen 3 (a que está no ar)!
+MODELO_ATUAL = "models/sniper_pro_gen_3.zip" 
+
+# 🎯 Ajuste Fino: 10.000 passos. 
+# Ideal para não "decorar" o dia (Overfitting) e aprender a nova tendência.
+PASSOS_DE_TREINO = 10000 
 
 def preparar_dados(caminho_csv):
     print("🧹 Engenharia de Features nos dados reais...")
@@ -54,7 +57,7 @@ if __name__ == "__main__":
     print(f"🔥 Iniciando Treinamento com Gestão de Risco Ativada ({PASSOS_DE_TREINO} steps)...")
     model.learn(total_timesteps=PASSOS_DE_TREINO)
     
-    novo_nome = "models/sniper_pro_gen_3.zip"
+    novo_nome = "models/sniper_pro_gen_5.zip"
     model.save(novo_nome)
     print(f"🏆 Treinamento Concluído! Novo modelo salvo como: {novo_nome}")
-    print(">>> Suba este arquivo no Dashboard da Vercel para injetar a Gen 3!")
+    print(">>> Suba este arquivo no Dashboard da Vercel para injetar a Gen 5!")

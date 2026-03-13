@@ -1,9 +1,39 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { createChart, ColorType, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts'; 
 import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database } from 'lucide-react';
 
+// ==========================================
+// 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
+// ==========================================
+const calculateZigZag = (data, thresholdPct = 0.5) => {
+  if (!data || data.length === 0) return [];
+  let pivots = [];
+  let lastPivot = { ...data[0], type: 'none' };
+  let trend = 0; 
+
+  for (let i = 1; i < data.length; i++) {
+    const candle = data[i];
+    const changeHigh = ((candle.high - lastPivot.low) / lastPivot.low) * 100;
+    const changeLow = ((lastPivot.high - candle.low) / lastPivot.high) * 100;
+
+    if (trend !== 1 && changeHigh >= thresholdPct) {
+      pivots.push({ time: lastPivot.time, value: lastPivot.low });
+      lastPivot = candle;
+      trend = 1;
+    } else if (trend !== -1 && changeLow >= thresholdPct) {
+      pivots.push({ time: lastPivot.time, value: lastPivot.high });
+      lastPivot = candle;
+      trend = -1;
+    } else {
+      if (trend === 1 && candle.high > lastPivot.high) lastPivot = candle;
+      if (trend === -1 && candle.low < lastPivot.low) lastPivot = candle;
+    }
+  }
+  pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
+  return pivots;
+};
 
 // ==========================================
 // 🧬 COMPONENTE: DOJO (PROTOCOLO APOCALIPSE)
@@ -14,8 +44,7 @@ function DojoPanel({ state }) {
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState('');
 
-  // Converte a URL do WebSocket para a URL da API HTTP (Render)
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000/ws";
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
   const API_URL = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').replace('/ws', '');
 
   const handleDownload = () => {
@@ -60,7 +89,6 @@ function DojoPanel({ state }) {
       </h2>
       
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* COLUNA 1: AUTENTICAÇÃO */}
         <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700">
           <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-2">
             <Key size={14} className="text-yellow-500"/> Chave de Autorização
@@ -79,7 +107,6 @@ function DojoPanel({ state }) {
           )}
         </div>
 
-        {/* COLUNA 2: EXTRAÇÃO (DOWNLOAD) */}
         <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between">
           <div>
             <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-2 mb-2">
@@ -98,7 +125,6 @@ function DojoPanel({ state }) {
           </button>
         </div>
 
-        {/* COLUNA 3: INJEÇÃO (UPLOAD) */}
         <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between">
           <div>
             <label className="text-xs font-semibold text-slate-400 uppercase flex items-center gap-2 mb-2">
@@ -129,162 +155,243 @@ function DojoPanel({ state }) {
 }
 
 // ==========================================
-// 📊 DASHBOARD PRINCIPAL
+// 📈 COMPONENTE DE GRÁFICO ISOLADO (AUDITORIA LIMPA)
+// ==========================================
+function TradingChart({ liveCandle, markersData }) {
+    const chartContainerRef = useRef(null);
+    const tooltipRef = useRef(null);
+    const chartInstance = useRef(null);
+    const seriesInstance = useRef(null);
+    const zigzagSeriesRef = useRef(null);
+    const exactTradeLineRef = useRef(null);
+    const isDataLoaded = useRef(false);
+    
+    // 🧠 Memória interna para guardar referências rápidas dos marcadores e preços
+    const markersRef = useRef([]);
+    const chartDataMap = useRef(new Map());
+
+    // Atualiza a memória de marcadores sempre que chegam via props
+    useEffect(() => {
+        if (markersData) {
+            markersRef.current = markersData;
+        }
+    }, [markersData]);
+
+    useEffect(() => {
+        if (!chartContainerRef.current || chartInstance.current) return;
+
+        const initialWidth = chartContainerRef.current.clientWidth || 800;
+
+        const chart = createChart(chartContainerRef.current, {
+            layout: { background: { type: ColorType.Solid, color: '#0f172a' }, textColor: '#94a3b8' },
+            grid: { vertLines: { color: 'rgba(30, 41, 59, 0.4)' }, horzLines: { color: 'rgba(30, 41, 59, 0.4)' } },
+            width: initialWidth,
+            height: 450,
+            crosshair: { mode: 0 }, 
+            timeScale: { timeVisible: true, borderColor: '#334155' },
+            rightPriceScale: { borderColor: '#334155' },
+        });
+
+        // 🎯 CANDLE DIMMING: Configuração Padrão Cinza Escuro
+        const newSeries = chart.addSeries(CandlestickSeries, {
+            upColor: '#1e293b', 
+            downColor: '#1e293b', 
+            borderUpColor: '#334155', 
+            borderDownColor: '#334155', 
+            wickUpColor: '#334155', 
+            wickDownColor: '#334155',
+        });
+
+        // 🎯 ESTRUTURA MACRO: ZigZag Azul Celeste Fino
+        const zigzagSeries = chart.addSeries(LineSeries, {
+            color: '#38bdf8', lineWidth: 1, lineStyle: 2, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+        });
+
+        // 🎯 AUDITORIA: Vetor de Precisão Sob Demanda (Invisível por Padrão)
+        const exactTradeLine = chart.addSeries(LineSeries, {
+            color: '#a855f7', lineWidth: 2, lineStyle: 3, crosshairMarkerVisible: true, lastValueVisible: false, priceLineVisible: false,
+        });
+
+        chartInstance.current = chart;
+        seriesInstance.current = newSeries;
+        zigzagSeriesRef.current = zigzagSeries;
+        exactTradeLineRef.current = exactTradeLine;
+
+        const carregarHistorico = async () => {
+            const API_URL = "http://127.0.0.1:10000"; 
+            try {
+                const res = await fetch(`${API_URL}/api/historico`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.length > 0) {
+                        const unique = [...data].sort((a, b) => a.time - b.time);
+                        
+                        // 1. Guarda os preços num Mapa para uso da Linha Exata depois
+                        unique.forEach(candle => {
+                            chartDataMap.current.set(candle.time, candle);
+                        });
+
+                        // 2. Aplica as Cores Neon apenas nas velas com Markers
+                        const dimmedData = unique.map(candle => {
+                            const marker = markersRef.current.find(m => m.time === candle.time);
+                            if (marker) {
+                                return { ...candle, color: marker.color, wickColor: marker.color, borderColor: marker.color };
+                            }
+                            return candle; // Mantém cinza
+                        });
+
+                        newSeries.setData(dimmedData);
+                        
+                        const zData = calculateZigZag(dimmedData, 0.8);
+                        zigzagSeries.setData(zData);
+
+                        chart.timeScale().fitContent();
+                        isDataLoaded.current = true;
+                    }
+                }
+            } catch (err) { console.error("Erro ao buscar dados iniciais.", err); }
+        };
+
+        carregarHistorico();
+
+        // 🎯 MOTOR DE RAIO-X INTERATIVO (HOVER)
+        chart.subscribeCrosshairMove((param) => {
+            const tooltip = tooltipRef.current;
+            if (!param.time || param.point.x < 0 || param.point.y < 0 || !tooltip) {
+                tooltip.style.display = 'none';
+                exactTradeLine.setData([]); // Esconde a linha
+                return;
+            }
+
+            const hoveredMarker = markersRef.current.find(m => m.time === param.time);
+            const candleData = chartDataMap.current.get(param.time) || param.seriesData.get(newSeries);
+
+            if (hoveredMarker && candleData) {
+                tooltip.style.display = 'block';
+                tooltip.style.left = param.point.x + 15 + 'px';
+                tooltip.style.top = param.point.y + 15 + 'px';
+                
+                // Semântica Visual
+                const isEntry = hoveredMarker.shape === 'circle';
+                const direction = hoveredMarker.text.includes('LONG') ? '⬆️ LONG' : '⬇️ SHORT';
+                const result = hoveredMarker.text === 'WIN' ? '✅ WIN' : (hoveredMarker.text === 'LOSS' ? '❌ LOSS' : '');
+                
+                // Extração da Fotografia Mental (se os dados foram enviados na api/websocket)
+                const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
+                const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
+
+                tooltip.innerHTML = `
+                    <div class="font-bold text-sm mb-1 ${hoveredMarker.color === '#22c55e' ? 'text-green-400' : 'text-red-400'}">
+                        ${isEntry ? 'ESTADO IA: ENTRADA' : 'ESTADO IA: SAÍDA'}
+                    </div>
+                    <div class="text-xs text-white mb-1">Ação: ${isEntry ? direction : result}</div>
+                    <div class="text-xs text-slate-300">Preço: $${candleData.close.toFixed(2)}</div>
+                    <div class="mt-2 pt-2 border-t border-slate-600 text-[10px] text-slate-400 font-mono">
+                        RSI: ${rsiText}<br/>
+                        BB Largura: ${bbText}
+                    </div>
+                `;
+
+                // 🎯 Desenhar Vetor de Precisão (A -> B)
+                if (isEntry) {
+                    // Busca o próximo marcador de saída
+                    const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
+                    if (exitMarker) {
+                        const exitCandle = chartDataMap.current.get(exitMarker.time);
+                        exactTradeLine.setData([
+                            { time: param.time, value: candleData.close },
+                            { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }
+                        ]);
+                    }
+                } else {
+                    // Se estiver no hover da Saída, busca o marcador de entrada correspondente
+                    const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
+                    if (entryMarker) {
+                        const entryCandle = chartDataMap.current.get(entryMarker.time);
+                        exactTradeLine.setData([
+                            { time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close },
+                            { time: param.time, value: candleData.close }
+                        ]);
+                    }
+                }
+            } else {
+                tooltip.style.display = 'none';
+                exactTradeLine.setData([]); // Apaga o vetor se sair do candle colorido
+            }
+        });
+
+        const resizeObserver = new ResizeObserver(entries => {
+            if (entries.length === 0 || !chartInstance.current) return;
+            const { width, height } = entries[0].contentRect;
+            chartInstance.current.applyOptions({ width, height });
+        });
+        resizeObserver.observe(chartContainerRef.current);
+
+        return () => {
+            resizeObserver.disconnect();
+            chart.remove();
+            chartInstance.current = null;
+        };
+    }, []); 
+
+    // Efeito Reativo: Atualiza a vela ao vivo e pinta de Neon se houver sinal
+    useEffect(() => {
+        if (isDataLoaded.current && seriesInstance.current && liveCandle?.time) {
+            chartDataMap.current.set(liveCandle.time, liveCandle); // Atualiza memória
+
+            let cColor = '#1e293b'; // Default dimming
+            const hasAction = markersRef.current.find(m => m.time === liveCandle.time);
+            if (hasAction) cColor = hasAction.color; // Aplica o Neon
+
+            try {
+                seriesInstance.current.update({
+                    ...liveCandle,
+                    color: cColor, wickColor: cColor, borderColor: cColor
+                });
+            } catch (e) {}
+        }
+    }, [liveCandle]);
+
+    // Efeito Reativo: Atualiza as Setas sem recarregar o gráfico
+    useEffect(() => {
+        if (isDataLoaded.current && seriesInstance.current && markersData?.length > 0) {
+            try {
+                const sortedMarkers = [...markersData].sort((a, b) => a.time - b.time);
+                seriesInstance.current.setMarkers(sortedMarkers);
+            } catch (e) {}
+        }
+    }, [markersData]);
+
+    return (
+        <div className="w-full relative rounded overflow-hidden" style={{ minHeight: '450px' }}>
+            <div 
+                ref={tooltipRef} 
+                className="absolute z-50 bg-slate-900/90 backdrop-blur border border-purple-500/50 p-3 rounded shadow-lg pointer-events-none transition-opacity duration-100"
+                style={{ display: 'none' }}
+            ></div>
+            <div ref={chartContainerRef} className="w-full h-[450px]"></div>
+        </div>
+    );
+}
+
+// ==========================================
+// 📊 DASHBOARD PRINCIPAL (O Pai)
 // ==========================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
-  const chartContainerRef = useRef(null);
-  const chartInstance = useRef(null);
-  const seriesInstance = useRef(null);
-  const tradeSeriesInstance = useRef(null);
-  const markersPluginInstance = useRef(null); 
   const ws = useRef(null);
 
-  const priceLineRef = useRef(null);
-
-  // 🛑 A TRAVA MÁGICA CONTRA O RESET DO ZOOM
-  const isDataLoaded = useRef(false); 
-
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000/ws";
+    const socketUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
     ws.current = new WebSocket(socketUrl);
     
     ws.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
       setData(message);
-
-      if (seriesInstance.current && chartInstance.current) {
-        
-        // --- 🛡️ GESTÃO DA LINHA DE ENTRADA ATUAL ---
-        if (message.in_position && message.entry_price) {
-          if (!priceLineRef.current) {
-            priceLineRef.current = seriesInstance.current.createPriceLine({
-              price: message.entry_price,
-              color: message.current_position === 1 ? '#22c55e' : '#ef4444',
-              lineWidth: 2,
-              lineStyle: 2,
-              axisLabelVisible: true,
-              title: 'ENTRADA',
-            });
-          }
-        } else {
-          if (priceLineRef.current) {
-            seriesInstance.current.removePriceLine(priceLineRef.current);
-            priceLineRef.current = null;
-          }
-        }
-        // -----------------------------------------------
-
-        // 1. CARGA INICIAL
-        if (!isDataLoaded.current && message.chart_data?.length > 0) {
-          const sorted = [...message.chart_data].sort((a, b) => a.time - b.time);
-          const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
-          seriesInstance.current.setData(unique);
-          
-          // Injeta o histórico de rastros (Efeito IQ Option)
-          if (message.trade_lines && message.trade_lines.length > 0 && tradeSeriesInstance.current) {
-            tradeSeriesInstance.current.setData(message.trade_lines);
-          }
-          
-          chartInstance.current.timeScale().fitContent();
-          isDataLoaded.current = true;
-        } 
-        // 2. PING DE PREÇO REAL
-        else if (isDataLoaded.current && message.last_candle?.time) {
-          try {
-            seriesInstance.current.update(message.last_candle);
-            
-            // ATUALIZAÇÃO DO VETOR: Substitui a linha inteira para não bugar o desenho
-            if (message.trade_lines && tradeSeriesInstance.current) {
-              tradeSeriesInstance.current.setData(message.trade_lines); // 👈 Usa setData ao invés de update
-            }
-          } catch (e) {}
-        }
-        
-        // 3. SETAS DE OPERAÇÃO
-        if (message.markers?.length > 0 && markersPluginInstance.current) {
-          try {
-            const sortedMarkers = [...message.markers].sort((a, b) => a.time - b.time);
-            markersPluginInstance.current.setMarkers(sortedMarkers);
-          } catch (e) {}
-        }
-      }
     };
     
     return () => { if (ws.current) ws.current.close(); };
   }, []);
-
-  useEffect(() => {
-    if (!chartContainerRef.current || !data || data.chart_data.length === 0) return;
-    if (chartInstance.current) return; // IMPEDE O REACT DE DESTRUIR O GRÁFICO
-
-    const chart = createChart(chartContainerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#94a3b8' },
-      grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
-      width: chartContainerRef.current.clientWidth,
-      height: 400,
-      timeScale: { 
-        timeVisible: true, 
-        secondsVisible: false,
-        borderColor: '#334155',
-        shiftVisibleRangeOnNewBar: false, // 🛑 DESLIGA O "ÍMÃ" DO TRADINGVIEW
-      },
-      rightPriceScale: { borderColor: '#334155' },
-    });
-
-    const newSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e', downColor: '#ef4444', borderUpColor: '#22c55e', borderDownColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444',
-    });
-
-   // 👇 NOVA SÉRIE: O Rastro Histórico da IQ Option 👇
-    const tradeSeries = chart.addSeries(LineSeries, {
-      color: '#3b82f6', // Azul elétrico
-      lineWidth: 2,
-      lineStyle: 2, // Tracejado
-      crosshairMarkerVisible: false,
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-    tradeSeriesInstance.current = tradeSeries;
-
-    const markersPlugin = createSeriesMarkers(newSeries, []);
-    markersPluginInstance.current = markersPlugin;
-    
-    // Liga as instâncias à memória
-    chartInstance.current = chart;
-    seriesInstance.current = newSeries;
-
-    // Se no momento de criar o quadro os dados já estiverem ali, injetamos:
-    if (!isDataLoaded.current && data.chart_data && data.chart_data.length > 0) {
-        const sorted = [...data.chart_data].sort((a, b) => a.time - b.time);
-        const unique = sorted.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
-        newSeries.setData(unique);
-        
-        if (data.trade_lines && data.trade_lines.length > 0) {
-            tradeSeries.setData(data.trade_lines);
-        }
-        
-        if (data.markers && data.markers.length > 0) {
-            const sortedMarkers = [...data.markers].sort((a, b) => a.time - b.time);
-            markersPlugin.setMarkers(sortedMarkers);
-        }
-        chart.timeScale().fitContent();
-        isDataLoaded.current = true;
-    }
-
-    const handleResize = () => chart.applyOptions({ width: chartContainerRef.current.clientWidth });
-    window.addEventListener('resize', handleResize);
-    
-    return () => { 
-      window.removeEventListener('resize', handleResize); 
-      chart.remove(); 
-      chartInstance.current = null; 
-      seriesInstance.current = null;
-      tradeSeriesInstance.current = null;
-      markersPluginInstance.current = null;
-      isDataLoaded.current = false;
-    };
-  }, [data !== null]); 
 
   if (!data) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
@@ -294,9 +401,7 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-[#0f172a] p-6 font-sans text-slate-100">
-      
-      {/* HEADER PRINCIPAL */}
+    <div className="min-h-screen bg-[#0f172a] p-6 font-sans text-slate-100 relative">
       <header className="flex justify-between items-center mb-6 border-b border-slate-700/50 pb-4">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-3 text-white">
@@ -315,7 +420,6 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* CARDS DE INFORMAÇÃO */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
          <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 flex flex-col justify-between shadow-lg">
             <div className="flex justify-between items-start mb-2">
@@ -360,10 +464,10 @@ export default function Dashboard() {
          </div>
       </div>
 
-      {/* ÁREA PRINCIPAL: GRÁFICO E LIVRO DE OFERTAS */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg flex flex-col">
-           <div ref={chartContainerRef} className="w-full relative rounded overflow-hidden" style={{ height: '450px' }}></div>
+           {/* 🚀 O COMPONENTE DE GRÁFICO ISOLADO COM A AUDITORIA LIMPA ATIVADA! */}
+           <TradingChart liveCandle={data.last_candle} markersData={data.markers} />
         </div>
 
         <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-[482px] flex flex-col shadow-lg">
@@ -389,9 +493,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* NOVO: PAINEL DE CONTROLE HÍBRIDO */}
       <DojoPanel state={data} />
-
     </div>
   );
 }

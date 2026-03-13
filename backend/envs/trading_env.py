@@ -19,16 +19,19 @@ class BitcoinTradingEnv(gym.Env):
         self.position = 0
         self.entry_price = 0.0
         
-        # 🛡️ GESTÃO DE RISCO INSTITUCIONAL (PAYOFF 1:2)
-        self.fee = 0.0005          # Taxa da corretora
+        # 🛡️ GESTÃO DE RISCO ALINHADA COM A PRODUÇÃO (server.py)
+        self.fee = 0.0010          # Taxa corrigida para 0.1%
         self.stop_loss = -0.010    # Punição máxima em -1%
-        self.take_profit = 0.020   # Prêmio máximo em +2%
+        
+        # Memória interna da operação para o Trailing Stop
+        self.max_profit_pct = 0.0
         
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
         self.position = 0
         self.entry_price = 0.0
+        self.max_profit_pct = 0.0
         return self.features[self.current_step], {}
         
     def step(self, action):
@@ -39,38 +42,53 @@ class BitcoinTradingEnv(gym.Env):
         current_price = self.closes[self.current_step]
         target_pos = 1 if action == 1 else (-1 if action == 2 else 0)
         
-        # 1. Punição leve por excesso de inatividade (estimula a buscar operações)
-        if self.position == 0 and target_pos == 0:
-            reward -= 0.0005
-            
-        # 2. O Cão de Guarda do Treinamento (Avalia SL e TP)
+        # 🎯 ARMADILHA 1 RESOLVIDA: Nenhuma punição por inatividade.
+        # A IA tem permissão total para não operar e esperar o momento perfeito.
+        
+        # 🎯 ARMADILHA 3 RESOLVIDA: Desalinhamento Treino vs. Produção
         if self.position != 0:
             change_pct = (current_price - self.entry_price) / self.entry_price
             unrealized_pct = change_pct if self.position == 1 else -change_pct
             
-            if unrealized_pct <= self.stop_loss:
-                reward -= 5.0 # ❌ CHOQUE FORTE: Bateu no Stop Loss!
-                self.position = 0
-                target_pos = 0
-            elif unrealized_pct >= self.take_profit:
-                reward += 10.0 # 🏆 BISCOITO GIGANTE: Bateu no Take Profit!
-                self.position = 0
-                target_pos = 0
-            else:
-                # Recompensa contínua por estar no caminho certo (incentiva a segurar a posição vencedora)
-                reward += (unrealized_pct * 1.5)
+            # Atualiza o pico de lucro da operação atual
+            if unrealized_pct > self.max_profit_pct:
+                self.max_profit_pct = unrealized_pct
 
-        # 3. Execução de Ordens pela IA
+            # Aplica EXATAMENTE as mesmas regras de Breakeven e Trailing Stop do backend
+            dynamic_stop = self.stop_loss
+            
+            if self.max_profit_pct >= 0.015: 
+                dynamic_stop = self.max_profit_pct - 0.006
+            elif self.max_profit_pct >= 0.008:
+                dynamic_stop = 0.002
+
+            # O Cão de Guarda atua se o stop dinâmico for atingido
+            if unrealized_pct <= dynamic_stop:
+                target_pos = 0 # Força a IA a fechar a posição
+                
+        # 3. Execução de Ordens pela IA (Aqui o PnL é julgado)
         if target_pos != self.position:
+            
+            # FECHAMENTO DA OPERAÇÃO
             if self.position != 0:
-                # Se a IA decidiu fechar a operação manualmente antes de bater no SL/TP
                 change_pct = (current_price - self.entry_price) / self.entry_price
                 pnl_pct = change_pct if self.position == 1 else -change_pct
-                reward += (pnl_pct * 20.0) # Multiplicador para o lucro/prejuízo real capturado
                 
+                # Descontando as taxas (entrada e saída)
+                real_pnl = pnl_pct - (self.fee * 2)
+                
+                # 🎯 ARMADILHA 2 RESOLVIDA: Reward Hacking
+                # A recompensa (+ ou -) só é entregue AQUI, quando o lucro ou prejuízo é REALIZADO.
+                # Multiplicador alto (100.0) para que o Cérebro sinta fortemente o impacto da vitória ou derrota.
+                reward += (real_pnl * 100.0) 
+                
+            # ABERTURA DA OPERAÇÃO
             if target_pos != 0:
                 self.entry_price = current_price
-                reward -= (self.fee * 5) # Punição ampliada pela taxa (ensina a não fazer overtrading)
+                self.max_profit_pct = 0.0 # Reseta a memória para a nova trade
+                
+                # Pequena punição inicial pela taxa para inibir overtrading (ensina que abrir ordem custa caro)
+                reward -= (self.fee * 5.0) 
                 
             self.position = target_pos
             

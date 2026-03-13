@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 import pandas_ta_classic as ta
 import ccxt.async_support as ccxt
-from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
@@ -22,14 +21,15 @@ warnings.filterwarnings("ignore")
 # --- CONFIGURAÇÕES DO APOCALIPSE ---
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '5m'
-MODEL_PATH = "models/sniper_pro_gen_4.zip" 
+MODEL_PATH = "models/sniper_pro_gen_5.zip" 
 DATA_PATH = "data/live_market_data.csv"
 START_TIME = time.time()
-FEE_RATE = 0.0005 
 
-# VARIÁVEIS DE GESTÃO DE RISCO 
-STOP_LOSS_PCT = -0.010   # Corta a perda em -1%
-TAKE_PROFIT_PCT = +0.020 # Coloca no bolso em +2% (Usado apenas se a dinâmica não pegar)
+# 🎯 CORREÇÃO 3: Taxa ajustada para 0.1% (Padrão Binance Spot)
+FEE_RATE = 0.0010 
+
+STOP_LOSS_PCT = -0.010   
+TAKE_PROFIT_PCT = +0.020 
 
 # --- VARIÁVEIS DO SIMULADOR ---
 balance = 100.00
@@ -37,9 +37,7 @@ position = 0
 entry_price = 0.0
 wins = 0
 losses = 0
-max_profit_pct = 0.0  # 👈 MEMÓRIA DO PICO DE LUCRO (Gestão Dinâmica)
-historical_lines = [] # 👈 NOVA: Guarda os vetores passados
-trade_entry_ts = 0    # 👈 NOVA: Lembra o momento exato da entrada
+max_profit_pct = 0.0  
 
 state = {
     "asset": SYMBOL,
@@ -48,7 +46,6 @@ state = {
     "entry_price": 0.0,
     "current_position": 0,
     "balance": balance, 
-    "trade_lines": [], # 👈 Rastro do Efeito IQ Option
     "status": "INICIANDO MOTORES...",
     "uptime": "00:00:00",
     "last_candle": {},
@@ -56,7 +53,7 @@ state = {
     "markers": [],
     "order_book": [], 
     "adaptation": {
-        "generation": 1,
+        "generation": 4,
         "learning_state": "OBSERVANDO",
         "initial_win_rate": 0.0,
         "current_win_rate": 0.0,
@@ -191,7 +188,6 @@ def get_uptime():
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, is_training
     global balance, position, entry_price, wins, losses, max_profit_pct
-    global historical_lines, trade_entry_ts # 👈 ADICIONE ESTA LINHA
     
     exchange = ccxt.binanceus({'enableRateLimit': True})
     print(f">>> 🚀 CONECTADO AO MERCADO REAL (BINANCE US). AGUARDANDO ALVOS...")
@@ -203,7 +199,9 @@ async def sniper_loop():
     consecutive_signals = 0 
     last_signal = 0   
     last_trade_ts = 0      
-    cooldown_until_ts = 0 
+    cooldown_until_ts = 0  
+    
+    last_saved_candle_ts = 0 # 🎯 CORREÇÃO 1: Controle de salvamento no disco
 
     while True:
         try:
@@ -211,13 +209,22 @@ async def sniper_loop():
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            if os.path.exists(DATA_PATH):
-                df_hist = pd.read_csv(DATA_PATH)
-                df_hist = pd.concat([df_hist, df]).drop_duplicates(subset=['timestamp']).tail(2000)
-                df_hist.to_csv(DATA_PATH, index=False)
-            else:
-                if not os.path.exists("data"): os.makedirs("data")
-                df.to_csv(DATA_PATH, index=False)
+            # 🎯 CORREÇÃO 1: Salvar apenas quando uma nova vela for fechada (a cada 5 minutos)
+            current_candle_ts = ohlcv[-1][0]
+            closed_candle_ts = ohlcv[-2][0] # A vela anterior é a garantida que fechou
+            
+            if closed_candle_ts > last_saved_candle_ts:
+                if os.path.exists(DATA_PATH):
+                    df_hist = pd.read_csv(DATA_PATH)
+                    # Adiciona todas menos a atual em formação, mantendo as últimas 2000
+                    df_hist = pd.concat([df_hist, df.iloc[:-1]]).drop_duplicates(subset=['timestamp']).tail(2000)
+                    df_hist.to_csv(DATA_PATH, index=False)
+                else:
+                    if not os.path.exists("data"): os.makedirs("data")
+                    df.iloc[:-1].to_csv(DATA_PATH, index=False)
+                
+                last_saved_candle_ts = closed_candle_ts
+                print(f">>> 💾 Mercado Logado no CSV. Vela Fechada: {pd.to_datetime(closed_candle_ts, unit='ms')}")
 
             df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
             df['rsi'] = ta.rsi(df['close'], length=14)
@@ -273,55 +280,47 @@ async def sniper_loop():
                         else: consecutive_signals = 0; last_signal = 0
 
                         if act_idx == 0: target_pos = 0
-                        elif consecutive_signals >= 2: # 👈 MUDANÇA: Agora exige 2 velas de confirmação
+                        elif consecutive_signals >= 2: 
                             target_pos = 1 if act_idx == 1 else -1
                             consecutive_signals = 0 
                         else:
                             state["status"] = f"🔍 VALIDANDO {'LONG' if act_idx == 1 else 'SHORT'}... ({consecutive_signals}/2)"
 
-                        # 👇 NOVO: CÃO DE GUARDA DO COOLDOWN 👇
-                        # Se a IA quiser entrar, mas ainda estiver de castigo, bloqueamos a entrada
                         if target_pos != 0 and position == 0 and current_ts < cooldown_until_ts:
                             target_pos = 0
                             min_restantes = int((cooldown_until_ts - current_ts) / 60)
                             state["status"] = f"🧊 COOLDOWN: Evitando taxas. Retorno em {min_restantes} min..."
-                    # 👇 🛡️ GESTÃO DE RISCO DINÂMICA (TRAILING STOP & BREAKEVEN) 👇
+
+                    # 🛡️ GESTÃO DE RISCO DINÂMICA
                     if not warming_up and position != 0:
                         change_pct = (current_price - entry_price) / entry_price
                         unrealized_pct = change_pct if position == 1 else -change_pct
                         
-                        # Atualiza o pico de lucro da operação atual
                         if unrealized_pct > max_profit_pct:
                             max_profit_pct = unrealized_pct
 
-                        # LÓGICA DO STOP MÓVEL
-                        dynamic_stop = STOP_LOSS_PCT # Começa no Stop original (ex: -1%)
+                        dynamic_stop = STOP_LOSS_PCT 
                         stop_type = "STOP LOSS"
 
-                        # Nível 2: Trailing Stop (Deixa o lucro correr, seguindo 0.6% atrás do pico)
                         if max_profit_pct >= 0.015: 
                             dynamic_stop = max_profit_pct - 0.006
                             stop_type = "TRAILING STOP"
-                        
-                        # Nível 1: Breakeven (Se bateu 0.8% de lucro, garante 0.2% no bolso + taxas)
                         elif max_profit_pct >= 0.008:
                             dynamic_stop = 0.002
                             stop_type = "BREAKEVEN"
 
-                        # Executa a guilhotina se o preço cair abaixo da linha dinâmica atual
                         if unrealized_pct <= dynamic_stop:
-                            target_pos = 0  # 🛑 Força o fechamento
+                            target_pos = 0  
                             horario_log = datetime.now().strftime("%H:%M:%S")
                             cor_log = "🎯" if dynamic_stop > 0 else "🛡️"
                             state["order_book"].insert(0, {"text": f"[{horario_log}] {cor_log} {stop_type} ACIONADO ({unrealized_pct*100:.2f}%)"})
-                    # 👆 FIM DA GESTÃO DE RISCO DINÂMICA 👆
 
-                    # 🛑 TRAVA DE METRALHADORA: Impede overtrading na mesma vela
                     if target_pos != 0 and position == 0 and current_ts == last_trade_ts:
                         target_pos = 0 
                         state["status"] = "⏳ AGUARDANDO NOVA VELA PARA OPERAR..."
 
                     if target_pos != position:
+                        # FECHAMENTO DA OPERAÇÃO
                         if position != 0:
                             change_pct = (current_price - entry_price) / entry_price
                             pnl = (balance * change_pct) if position == 1 else (balance * -change_pct)
@@ -331,7 +330,12 @@ async def sniper_loop():
                             
                             cor = "🟢" if pnl >= 0 else "🔴"
                             state["order_book"].insert(0, {"text": f"[{horario}] {cor} FECHOU POSIÇÃO | PnL: ${pnl:.2f}"})
-                            state["markers"].append({"time": current_ts, "position": "inBar", "color": "#eab308", "shape": "circle", "text": "SAÍDA"})
+                            
+                            fechamento_cor = "#22c55e" if pnl > 0 else "#ef4444"
+                            fechamento_texto = "WIN" if pnl > 0 else "LOSS"
+                            fechamento_pos = "belowBar" if pnl > 0 else "aboveBar"
+                            
+                            state["markers"].append({"time": current_ts, "position": fechamento_pos, "color": fechamento_cor, "shape": "square", "text": fechamento_texto})
 
                             state["adaptation"]["trades_analyzed"] += 1
                             if pnl > 0: wins += 1
@@ -341,40 +345,36 @@ async def sniper_loop():
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
                             
                             last_trade_ts = current_ts 
-                            cooldown_until_ts = current_ts + 900 # 👈 NOVO: Aplica 15 minutos (3 velas) de descanso forçado
-                            # 👇 GRAVA O PONTO B E QUEBRA A LINHA 👇
-                            if trade_entry_ts != 0 and current_ts > trade_entry_ts:
-                                historical_lines.append({"time": trade_entry_ts, "value": entry_price})
-                                historical_lines.append({"time": current_ts, "value": current_price})
-                                historical_lines.append({"time": current_ts + 1}) # Cria o espaço em branco (Quebra)
-                            # 👆 -------------------------------- 👆
+                            cooldown_until_ts = current_ts + 900 
                             state["entry_price"] = 0.0         
-                            state["current_position"] = 0   
+                            state["current_position"] = 0    
 
+                        # ABERTURA DA OPERAÇÃO
                         if target_pos != 0:
                             fee = balance * FEE_RATE; balance -= fee
                             entry_price = current_price
+                            
                             if target_pos == 1:
-                                state["markers"].append({"time": current_ts, "position": "belowBar", "color": "#22c55e", "shape": "arrowUp", "text": f"LONG @ ${current_price:.2f}"})
+                                state["markers"].append({"time": current_ts, "position": "belowBar", "color": "#22c55e", "shape": "circle", "text": "LONG"})
                                 label = "LONG 🟢"
                             else:
-                                state["markers"].append({"time": current_ts, "position": "aboveBar", "color": "#ef4444", "shape": "arrowDown", "text": f"SHORT @ ${current_price:.2f}"})
+                                state["markers"].append({"time": current_ts, "position": "aboveBar", "color": "#ef4444", "shape": "circle", "text": "SHORT"})
                                 label = "SHORT 🔴"
 
                             state["order_book"].insert(0, {"text": f"[{horario}] 🚀 ABRIU {label} em ${current_price:.2f}"})
                             state["in_position"] = True
-                            state["entry_price"] = entry_price       #  AVISA O FRONT ONDE ENTROU
-                            state["current_position"] = target_pos   #  AVISA SE É LONG (1) OU SHORT (-1)
+                            state["entry_price"] = entry_price       
+                            state["current_position"] = target_pos   
                             last_trade_ts = current_ts
-                            max_profit_pct = 0.0   # 👈 ZERA O PICO PARA A NOVA OPERAÇÃO
-                            trade_entry_ts = current_ts # 👈 GRAVA O PONTO A DO VETOR
+                            max_profit_pct = 0.0   
 
                         else:
                             state["in_position"] = False
-                            state["entry_price"] = 0.0         #  ZERA O PREÇO NO FRONTEND
-                            state["current_position"] = 0      #  ZERA A POSIÇÃO NO FRONTEND
+                            state["entry_price"] = 0.0         
+                            state["current_position"] = 0      
 
                         position = target_pos
+
                     if not warming_up and position != 0:
                         change = (current_price - entry_price) / entry_price
                         unrealized = (balance * change) if position == 1 else (balance * -change)
@@ -382,29 +382,31 @@ async def sniper_loop():
                     elif not warming_up and act_idx == 0:
                         state["status"] = "PROCURANDO OPORTUNIDADE"
 
-            clean_history = [{"time": int(r[0]/1000), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4])} for r in ohlcv[-1000:]]
+            # 🎯 CORREÇÃO 2: Envia apenas as últimas 100 velas via WebSocket com os Indicadores da IA
+            last_100 = df_clean.tail(100)
+            clean_history = []
+            
+            for _, row in last_100.iterrows():
+                clean_history.append({
+                    "time": int(row['timestamp'].timestamp()),
+                    "open": float(row['open']), 
+                    "high": float(row['high']), 
+                    "low": float(row['low']), 
+                    "close": float(row['close']),
+                    "rsi": float(row['rsi']), 
+                    "bb_width": float(row['bb_width']) # 🧠 INJETANDO O CÉREBRO NO FRONTEND
+                })
+
             state["chart_data"] = clean_history
             state["last_candle"] = clean_history[-1]
             
-           # 👇 NOVO EFEITO VETOR (Ponto A -> Ponto B) 👇
-            latest_time = clean_history[-1]["time"]
-            current_lines = historical_lines.copy()
-            
-            if position != 0 and trade_entry_ts != 0:
-                # Traça a linha reta viva da entrada até o preço deste segundo
-                current_lines.append({"time": trade_entry_ts, "value": entry_price})
-                if latest_time > trade_entry_ts:
-                    current_lines.append({"time": latest_time, "value": current_price})
-                    
-            state["trade_lines"] = current_lines[-1000:]
-            # 👆 FIM DO EFEITO VETOR 👆
-
             state["uptime"] = get_uptime()
-            state["markers"] = state["markers"][-50:]
+            state["markers"] = state["markers"][-100:] 
             
             # --- FAXINA LITE ---
             if 'df' in locals(): del df 
             gc.collect() 
+            await asyncio.sleep(5)
             await asyncio.sleep(5) 
 
         except Exception as e:
@@ -423,13 +425,30 @@ async def lifespan(app: FastAPI):
     if exchange: await exchange.close()
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Configuração de CORS agressiva para desenvolvimento local
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Permite qualquer origem (Frontend)
+    allow_credentials=True,
+    allow_methods=["*"], # Permite GET, POST, etc
+    allow_headers=["*"], # Permite todos os cabeçalhos
+)
 @app.get("/")
 async def health_check():
     return {"status": "IA Trader Pro Backend Online e Respirando!"}
 
-# --- ROTAS DO MODO HÍBRIDO (DOJO LOCAL) ---
+# 🎯 CORREÇÃO 2B: Nova Rota para o Frontend carregar as 1000 velas de uma vez ao abrir a tela
+@app.get("/api/historico")
+async def get_historico():
+    try:
+        if not exchange:
+            return {"error": "Exchange não iniciada"}
+        ohlcv = await exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=1000)
+        history = [{"time": int(r[0]/1000), "open": float(r[1]), "high": float(r[2]), "low": float(r[3]), "close": float(r[4])} for r in ohlcv]
+        return history
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download-dados")
 async def download_dados(senha: str):
@@ -440,15 +459,12 @@ async def download_dados(senha: str):
     if not os.path.exists(DATA_PATH):
         raise HTTPException(status_code=404, detail="Nenhum dado coletado ainda.")
         
-    # Checagem de 24 horas baseada no próprio arquivo de dados
     df = pd.read_csv(DATA_PATH)
     if len(df) > 0:
         first_ts = pd.to_datetime(df.iloc[0]['timestamp'])
         last_ts = pd.to_datetime(df.iloc[-1]['timestamp'])
         hours_collected = (last_ts - first_ts).total_seconds() / 3600
-        
         if hours_collected < 24.0:
-            # Não bloqueia o download, mas avisa o usuário (o frontend pode travar o botão com esse dado)
             print(f"⚠️ Aviso: Apenas {hours_collected:.1f}h de dados coletados.")
             
     filename = f"mercado_real_{datetime.now().strftime('%Y%m%d')}.csv"
@@ -467,15 +483,12 @@ async def upload_cerebro(senha: str, file: UploadFile = File(...)):
     new_gen = current_gen + 1
     new_path = f"models/sniper_pro_gen_{new_gen}.zip"
     
-    # Salva e substitui o modelo
     with open(new_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    # Recarrega o modelo na memória do Render em tempo real
     state["status"] = "🧠 ATUALIZANDO REDE NEURAL..."
     load_brain(new_path)
     
-    # Reseta a memória de curto prazo (LSTM) para evitar conflitos com o novo cérebro
     global lstm_states, episode_starts, wins, losses
     lstm_states = None 
     episode_starts = np.ones((1,), dtype=bool)
@@ -487,10 +500,8 @@ async def upload_cerebro(senha: str, file: UploadFile = File(...)):
     state["adaptation"]["current_win_rate"] = 0.0
     state["adaptation"]["initial_win_rate"] = 0.0
     state["adaptation"]["trades_analyzed"] = 0
-    
     state["adaptation"]["generation"] = new_gen
     
-    # Arquiva o CSV antigo para começar uma nova coleta limpa
     if os.path.exists(DATA_PATH):
         os.rename(DATA_PATH, f"data/archive_gen_{current_gen}.csv")
         
@@ -509,6 +520,5 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    # A Porta Dinâmica do Render:
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
