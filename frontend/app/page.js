@@ -5,7 +5,7 @@ import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweig
 import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database } from 'lucide-react';
 
 // ==========================================
-// 🧮 FUNÇÃO ZIGZAG (Topos e Fundos) - BLINDADA CONTRA CRASH
+// 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
 // ==========================================
 const calculateZigZag = (data, thresholdPct = 0.5) => {
   if (!data || data.length === 0) return [];
@@ -33,9 +33,8 @@ const calculateZigZag = (data, thresholdPct = 0.5) => {
   }
   pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
   
-  // 🛡️ ANTI-CRASH: Remove tempos duplicados que travam o TradingView
-  const uniquePivots = pivots.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i);
-  return uniquePivots.sort((a, b) => a.time - b.time);
+  // Garante tempos únicos para não quebrar o motor
+  return pivots.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i).sort((a, b) => a.time - b.time);
 };
 
 // ==========================================
@@ -158,7 +157,7 @@ function DojoPanel({ state }) {
 }
 
 // ==========================================
-// 📈 COMPONENTE DE GRÁFICO ISOLADO (AUDITORIA LIMPA)
+// 📈 COMPONENTE DE GRÁFICO ISOLADO (AUDITORIA LIMPA BLINDADA)
 // ==========================================
 function TradingChart({ liveCandle, markersData }) {
     const chartContainerRef = useRef(null);
@@ -171,11 +170,13 @@ function TradingChart({ liveCandle, markersData }) {
     
     const markersRef = useRef([]);
     const chartDataMap = useRef(new Map());
+    
+    // 🛡️ ESCUDOS ANTI-LOOP INFINITO
+    const currentHoverState = useRef("none"); 
+    const lastMarkersCount = useRef(0);
 
     useEffect(() => {
-        if (markersData) {
-            markersRef.current = markersData;
-        }
+        if (markersData) markersRef.current = markersData;
     }, [markersData]);
 
     useEffect(() => {
@@ -194,12 +195,7 @@ function TradingChart({ liveCandle, markersData }) {
         });
 
         const newSeries = chart.addSeries(CandlestickSeries, {
-            upColor: '#1e293b', 
-            downColor: '#1e293b', 
-            borderUpColor: '#334155', 
-            borderDownColor: '#334155', 
-            wickUpColor: '#334155', 
-            wickDownColor: '#334155',
+            upColor: '#1e293b', downColor: '#1e293b', borderUpColor: '#334155', borderDownColor: '#334155', wickUpColor: '#334155', wickDownColor: '#334155',
         });
 
         const zigzagSeries = chart.addSeries(LineSeries, {
@@ -224,43 +220,40 @@ function TradingChart({ liveCandle, markersData }) {
                 if (res.ok) {
                     const data = await res.json();
                     if (data && data.length > 0) {
-                        // 🛡️ ANTI-CRASH: Força unicidade absoluta dos tempos do histórico
                         const unique = [...data]
                             .sort((a, b) => a.time - b.time)
                             .filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
                         
-                        unique.forEach(candle => {
-                            chartDataMap.current.set(candle.time, candle);
-                        });
+                        unique.forEach(candle => chartDataMap.current.set(candle.time, candle));
 
                         const dimmedData = unique.map(candle => {
                             const marker = markersRef.current.find(m => m.time === candle.time);
-                            if (marker) {
-                                return { ...candle, color: marker.color, wickColor: marker.color, borderColor: marker.color };
-                            }
+                            if (marker) return { ...candle, color: marker.color, wickColor: marker.color, borderColor: marker.color };
                             return candle; 
                         });
 
                         newSeries.setData(dimmedData);
-                        
-                        const zData = calculateZigZag(dimmedData, 0.8);
-                        zigzagSeries.setData(zData);
-
+                        zigzagSeries.setData(calculateZigZag(dimmedData, 0.8));
                         chart.timeScale().fitContent();
                         isDataLoaded.current = true;
                     }
                 }
-            } catch (err) { console.error("Erro ao buscar dados iniciais.", err); }
+            } catch (err) { console.error("Erro API:", err); }
         };
 
         carregarHistorico();
 
-        // 🎯 MOTOR DE RAIO-X INTERATIVO
+        // 🎯 MOTOR DE RAIO-X INTERATIVO BLINDADO
         chart.subscribeCrosshairMove((param) => {
             const tooltip = tooltipRef.current;
+            
+            // Fora do gráfico ou sem alvo
             if (!param.time || param.point.x < 0 || param.point.y < 0 || !tooltip) {
                 tooltip.style.display = 'none';
-                exactTradeLine.setData([]); 
+                if (currentHoverState.current !== "none") {
+                    exactTradeLine.setData([]); // Limpa a linha
+                    currentHoverState.current = "none"; // Memoriza que já limpou
+                }
                 return;
             }
 
@@ -275,7 +268,6 @@ function TradingChart({ liveCandle, markersData }) {
                 const isEntry = hoveredMarker.shape === 'circle';
                 const direction = hoveredMarker.text.includes('LONG') ? '⬆️ LONG' : '⬇️ SHORT';
                 const result = hoveredMarker.text === 'WIN' ? '✅ WIN' : (hoveredMarker.text === 'LOSS' ? '❌ LOSS' : '');
-                
                 const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
                 const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
 
@@ -291,29 +283,36 @@ function TradingChart({ liveCandle, markersData }) {
                     </div>
                 `;
 
-                // 🛡️ ANTI-CRASH DA LINHA: Garante que o time da saída é diferente do da entrada
-                if (isEntry) {
-                    const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
-                    if (exitMarker && exitMarker.time !== param.time) {
-                        const exitCandle = chartDataMap.current.get(exitMarker.time);
-                        exactTradeLine.setData([
-                            { time: param.time, value: candleData.close },
-                            { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }
-                        ]);
-                    }
-                } else {
-                    const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
-                    if (entryMarker && entryMarker.time !== param.time) {
-                        const entryCandle = chartDataMap.current.get(entryMarker.time);
-                        exactTradeLine.setData([
-                            { time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close },
-                            { time: param.time, value: candleData.close }
-                        ]);
+                // 🛡️ SÓ DESENHA A LINHA SE ESTIVER NUM CANDLE NOVO (Quebra o Loop)
+                if (currentHoverState.current !== param.time) {
+                    currentHoverState.current = param.time; 
+
+                    if (isEntry) {
+                        const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
+                        if (exitMarker && exitMarker.time !== param.time) {
+                            const exitCandle = chartDataMap.current.get(exitMarker.time);
+                            exactTradeLine.setData([
+                                { time: param.time, value: candleData.close },
+                                { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }
+                            ]);
+                        }
+                    } else {
+                        const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
+                        if (entryMarker && entryMarker.time !== param.time) {
+                            const entryCandle = chartDataMap.current.get(entryMarker.time);
+                            exactTradeLine.setData([
+                                { time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close },
+                                { time: param.time, value: candleData.close }
+                            ]);
+                        }
                     }
                 }
             } else {
                 tooltip.style.display = 'none';
-                exactTradeLine.setData([]); 
+                if (currentHoverState.current !== "none") {
+                    exactTradeLine.setData([]); 
+                    currentHoverState.current = "none"; 
+                }
             }
         });
 
@@ -334,26 +333,24 @@ function TradingChart({ liveCandle, markersData }) {
     useEffect(() => {
         if (isDataLoaded.current && seriesInstance.current && liveCandle?.time) {
             chartDataMap.current.set(liveCandle.time, liveCandle); 
-
             let cColor = '#1e293b'; 
             const hasAction = markersRef.current.find(m => m.time === liveCandle.time);
             if (hasAction) cColor = hasAction.color; 
 
-            try {
-                seriesInstance.current.update({
-                    ...liveCandle,
-                    color: cColor, wickColor: cColor, borderColor: cColor
-                });
-            } catch (e) {}
+            try { seriesInstance.current.update({ ...liveCandle, color: cColor, wickColor: cColor, borderColor: cColor }); } catch (e) {}
         }
     }, [liveCandle]);
 
+    // 🛡️ SÓ ATUALIZA AS SETAS SE UMA NOVA ORDEM CHEGAR (Quebra o Loop)
     useEffect(() => {
         if (isDataLoaded.current && seriesInstance.current && markersData?.length > 0) {
-            try {
-                const sortedMarkers = [...markersData].sort((a, b) => a.time - b.time);
-                seriesInstance.current.setMarkers(sortedMarkers);
-            } catch (e) {}
+            if (markersData.length !== lastMarkersCount.current) {
+                lastMarkersCount.current = markersData.length;
+                try {
+                    const sortedMarkers = [...markersData].sort((a, b) => a.time - b.time);
+                    seriesInstance.current.setMarkers(sortedMarkers);
+                } catch (e) {}
+            }
         }
     }, [markersData]);
 
