@@ -5,3 +5,4 @@ numpy
 pandas_ta_classic
 ccxt
 sb3-contrib
+python-multipart
