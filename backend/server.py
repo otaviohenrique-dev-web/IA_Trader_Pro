@@ -20,12 +20,11 @@ warnings.filterwarnings("ignore")
 
 # --- CONFIGURAÇÕES DO APOCALIPSE ---
 SYMBOL = 'BTC/USDT'
-TIMEFRAME = '5m'
-MODEL_PATH = "models/sniper_pro_gen_5.zip" 
+TIMEFRAME = '15m' # 🛡️ SOLUÇÃO 3: Filtro de Ruído Natural (15 minutos)
+MODEL_PATH = "models/sniper_pro_gen_6.zip" 
 DATA_PATH = "data/live_market_data.csv"
 START_TIME = time.time()
 
-# 🎯 CORREÇÃO 3: Taxa ajustada para 0.1% (Padrão Binance Spot)
 FEE_RATE = 0.0010 
 
 STOP_LOSS_PCT = -0.010   
@@ -201,7 +200,7 @@ async def sniper_loop():
     last_trade_ts = 0      
     cooldown_until_ts = 0  
     
-    last_saved_candle_ts = 0 # 🎯 CORREÇÃO 1: Controle de salvamento no disco
+    last_saved_candle_ts = 0 
 
     while True:
         try:
@@ -209,14 +208,12 @@ async def sniper_loop():
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # 🎯 CORREÇÃO 1: Salvar apenas quando uma nova vela for fechada (a cada 5 minutos)
             current_candle_ts = ohlcv[-1][0]
-            closed_candle_ts = ohlcv[-2][0] # A vela anterior é a garantida que fechou
+            closed_candle_ts = ohlcv[-2][0] 
             
             if closed_candle_ts > last_saved_candle_ts:
                 if os.path.exists(DATA_PATH):
                     df_hist = pd.read_csv(DATA_PATH)
-                    # Adiciona todas menos a atual em formação, mantendo as últimas 2000
                     df_hist = pd.concat([df_hist, df.iloc[:-1]]).drop_duplicates(subset=['timestamp']).tail(2000)
                     df_hist.to_csv(DATA_PATH, index=False)
                 else:
@@ -270,6 +267,10 @@ async def sniper_loop():
                     current_ts = int(ohlcv[-1][0] / 1000) 
                     target_pos = position 
 
+                    # 🛡️ SOLUÇÃO 1: O Escudo de Volatilidade (Evita o Chop Market da Madrugada)
+                    current_atr_pct = float(last_row['atr_pct'])
+                    is_choppy = current_atr_pct < 0.0015 # Volatilidade menor que 0.15%
+
                     if warming_up:
                         warmup_counter += 1
                         state["status"] = f"🛡️ AQUECIMENTO TÉCNICO... ({warmup_counter}/10)"
@@ -279,7 +280,13 @@ async def sniper_loop():
                         elif act_idx != 0: consecutive_signals = 1; last_signal = act_idx
                         else: consecutive_signals = 0; last_signal = 0
 
-                        if act_idx == 0: target_pos = 0
+                        # Aplicação do Escudo
+                        if act_idx == 0: 
+                            target_pos = 0
+                        elif is_choppy and position == 0:
+                            target_pos = 0 # Força a ficar de fora da operação
+                            state["status"] = f"💤 MERCADO LATERAL. CÉREBRO EM ESPERA (ATR: {current_atr_pct*100:.2f}%)"
+                            consecutive_signals = 0
                         elif consecutive_signals >= 2: 
                             target_pos = 1 if act_idx == 1 else -1
                             consecutive_signals = 0 
@@ -289,7 +296,7 @@ async def sniper_loop():
                         if target_pos != 0 and position == 0 and current_ts < cooldown_until_ts:
                             target_pos = 0
                             min_restantes = int((cooldown_until_ts - current_ts) / 60)
-                            state["status"] = f"🧊 COOLDOWN: Evitando taxas. Retorno em {min_restantes} min..."
+                            state["status"] = f"🧊 COOLDOWN: Analisando erro passado. Retorno em {min_restantes} min..."
 
                     # 🛡️ GESTÃO DE RISCO DINÂMICA
                     if not warming_up and position != 0:
@@ -338,14 +345,20 @@ async def sniper_loop():
                             state["markers"].append({"time": current_ts, "position": fechamento_pos, "color": fechamento_cor, "shape": "square", "text": fechamento_texto})
 
                             state["adaptation"]["trades_analyzed"] += 1
-                            if pnl > 0: wins += 1
-                            else: losses += 1
+                            if pnl > 0: 
+                                wins += 1
+                                # 🛡️ SOLUÇÃO 2: Cooldown Positivo (Descansa 1 vela de 15m se acertou)
+                                cooldown_until_ts = current_ts + 900 
+                            else: 
+                                losses += 1
+                                # 🛡️ SOLUÇÃO 2: Cooldown Punitivo (Gelo de 4 velas / 1h para evitar Overtrading em Chop Market)
+                                cooldown_until_ts = current_ts + 3600 
+
                             state["adaptation"]["wins"] = wins
                             state["adaptation"]["losses"] = losses
                             state["adaptation"]["current_win_rate"] = round((wins / (wins + losses)) * 100, 1)
                             
                             last_trade_ts = current_ts 
-                            cooldown_until_ts = current_ts + 900 
                             state["entry_price"] = 0.0         
                             state["current_position"] = 0    
 
@@ -371,7 +384,7 @@ async def sniper_loop():
                         else:
                             state["in_position"] = False
                             state["entry_price"] = 0.0         
-                            state["current_position"] = 0      
+                            state["current_position"] = 0       
 
                         position = target_pos
 
@@ -379,10 +392,9 @@ async def sniper_loop():
                         change = (current_price - entry_price) / entry_price
                         unrealized = (balance * change) if position == 1 else (balance * -change)
                         state["status"] = f"{'🟢 LONG' if position == 1 else '🔴 SHORT'} ATIVO (PnL: ${unrealized:+.2f})"
-                    elif not warming_up and act_idx == 0:
+                    elif not warming_up and act_idx == 0 and not is_choppy:
                         state["status"] = "PROCURANDO OPORTUNIDADE"
 
-            # 🎯 CORREÇÃO 2: Envia apenas as últimas 100 velas via WebSocket com os Indicadores da IA
             last_100 = df_clean.tail(100)
             clean_history = []
             
@@ -394,7 +406,7 @@ async def sniper_loop():
                     "low": float(row['low']), 
                     "close": float(row['close']),
                     "rsi": float(row['rsi']), 
-                    "bb_width": float(row['bb_width']) # 🧠 INJETANDO O CÉREBRO NO FRONTEND
+                    "bb_width": float(row['bb_width']) 
                 })
 
             state["chart_data"] = clean_history
@@ -403,7 +415,6 @@ async def sniper_loop():
             state["uptime"] = get_uptime()
             state["markers"] = state["markers"][-100:] 
             
-            # --- FAXINA LITE ---
             if 'df' in locals(): del df 
             gc.collect() 
             await asyncio.sleep(5)
@@ -426,21 +437,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Configuração de CORS agressiva para desenvolvimento local
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permite qualquer origem (Frontend)
+    allow_origins=["*"], 
     allow_credentials=True,
-    allow_methods=["*"], # Permite GET, POST, etc
-    allow_headers=["*"], # Permite todos os cabeçalhos
+    allow_methods=["*"], 
+    allow_headers=["*"], 
 )
-# 🎯 ENSINANDO O BOT A RESPONDER AO "PING" DO RENDER
+
 @app.get("/")
-@app.head("/") 
+@app.head("/")
 async def health_check():
     return {"status": "IA Trader Pro Backend Online e Respirando!"}
 
-# 🎯 CORREÇÃO 2B: Nova Rota para o Frontend carregar as 1000 velas de uma vez ao abrir a tela
 @app.get("/api/historico")
 async def get_historico():
     try:
@@ -512,7 +521,7 @@ async def upload_cerebro(senha: str, file: UploadFile = File(...)):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    print(">>> 🟢 INTERFACE DA VERCEL CONECTADA!")
+    print(">>> 🟢 INTERFACE DA FRONT-END CONECTADA!")
     try:
         while True:
             await websocket.send_json(state)

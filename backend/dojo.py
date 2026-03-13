@@ -10,7 +10,7 @@ from envs.trading_env import BitcoinTradingEnv
 DADOS_BAIXADOS = "data/mercado_real_20260313.csv"
 
 # 👇 O treino agora parte da Gen 3 (a que está no ar)!
-MODELO_ATUAL = "models/sniper_pro_gen_3.zip" 
+MODELO_ATUAL = "models/sniper_pro_gen_5.zip" 
 
 # 🎯 Ajuste Fino: 10.000 passos. 
 # Ideal para não "decorar" o dia (Overfitting) e aprender a nova tendência.
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     print(f"🔥 Iniciando Treinamento com Gestão de Risco Ativada ({PASSOS_DE_TREINO} steps)...")
     model.learn(total_timesteps=PASSOS_DE_TREINO)
     
-    novo_nome = "models/sniper_pro_gen_5.zip"
+    novo_nome = "models/sniper_pro_gen_6.zip"
     model.save(novo_nome)
     print(f"🏆 Treinamento Concluído! Novo modelo salvo como: {novo_nome}")
-    print(">>> Suba este arquivo no Dashboard da Vercel para injetar a Gen 5!")
+    print(">>> Suba este arquivo no Dashboard da Vercel para injetar a Gen 6!")
