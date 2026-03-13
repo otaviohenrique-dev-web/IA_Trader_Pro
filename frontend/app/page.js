@@ -5,7 +5,7 @@ import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweig
 import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database } from 'lucide-react';
 
 // ==========================================
-// 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
+// 🧮 FUNÇÃO ZIGZAG (Topos e Fundos) - BLINDADA CONTRA CRASH
 // ==========================================
 const calculateZigZag = (data, thresholdPct = 0.5) => {
   if (!data || data.length === 0) return [];
@@ -32,7 +32,10 @@ const calculateZigZag = (data, thresholdPct = 0.5) => {
     }
   }
   pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
-  return pivots;
+  
+  // 🛡️ ANTI-CRASH: Remove tempos duplicados que travam o TradingView
+  const uniquePivots = pivots.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i);
+  return uniquePivots.sort((a, b) => a.time - b.time);
 };
 
 // ==========================================
@@ -166,11 +169,9 @@ function TradingChart({ liveCandle, markersData }) {
     const exactTradeLineRef = useRef(null);
     const isDataLoaded = useRef(false);
     
-    // 🧠 Memória interna para guardar referências rápidas dos marcadores e preços
     const markersRef = useRef([]);
     const chartDataMap = useRef(new Map());
 
-    // Atualiza a memória de marcadores sempre que chegam via props
     useEffect(() => {
         if (markersData) {
             markersRef.current = markersData;
@@ -192,7 +193,6 @@ function TradingChart({ liveCandle, markersData }) {
             rightPriceScale: { borderColor: '#334155' },
         });
 
-        // 🎯 CANDLE DIMMING: Configuração Padrão Cinza Escuro
         const newSeries = chart.addSeries(CandlestickSeries, {
             upColor: '#1e293b', 
             downColor: '#1e293b', 
@@ -202,12 +202,10 @@ function TradingChart({ liveCandle, markersData }) {
             wickDownColor: '#334155',
         });
 
-        // 🎯 ESTRUTURA MACRO: ZigZag Azul Celeste Fino
         const zigzagSeries = chart.addSeries(LineSeries, {
             color: '#38bdf8', lineWidth: 1, lineStyle: 2, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
         });
 
-        // 🎯 AUDITORIA: Vetor de Precisão Sob Demanda (Invisível por Padrão)
         const exactTradeLine = chart.addSeries(LineSeries, {
             color: '#a855f7', lineWidth: 2, lineStyle: 3, crosshairMarkerVisible: true, lastValueVisible: false, priceLineVisible: false,
         });
@@ -218,26 +216,29 @@ function TradingChart({ liveCandle, markersData }) {
         exactTradeLineRef.current = exactTradeLine;
 
         const carregarHistorico = async () => {
-            const API_URL = "http://127.0.0.1:10000"; 
+            const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
+            const API_URL = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').replace('/ws', '');
+            
             try {
                 const res = await fetch(`${API_URL}/api/historico`);
                 if (res.ok) {
                     const data = await res.json();
                     if (data && data.length > 0) {
-                        const unique = [...data].sort((a, b) => a.time - b.time);
+                        // 🛡️ ANTI-CRASH: Força unicidade absoluta dos tempos do histórico
+                        const unique = [...data]
+                            .sort((a, b) => a.time - b.time)
+                            .filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
                         
-                        // 1. Guarda os preços num Mapa para uso da Linha Exata depois
                         unique.forEach(candle => {
                             chartDataMap.current.set(candle.time, candle);
                         });
 
-                        // 2. Aplica as Cores Neon apenas nas velas com Markers
                         const dimmedData = unique.map(candle => {
                             const marker = markersRef.current.find(m => m.time === candle.time);
                             if (marker) {
                                 return { ...candle, color: marker.color, wickColor: marker.color, borderColor: marker.color };
                             }
-                            return candle; // Mantém cinza
+                            return candle; 
                         });
 
                         newSeries.setData(dimmedData);
@@ -254,12 +255,12 @@ function TradingChart({ liveCandle, markersData }) {
 
         carregarHistorico();
 
-        // 🎯 MOTOR DE RAIO-X INTERATIVO (HOVER)
+        // 🎯 MOTOR DE RAIO-X INTERATIVO
         chart.subscribeCrosshairMove((param) => {
             const tooltip = tooltipRef.current;
             if (!param.time || param.point.x < 0 || param.point.y < 0 || !tooltip) {
                 tooltip.style.display = 'none';
-                exactTradeLine.setData([]); // Esconde a linha
+                exactTradeLine.setData([]); 
                 return;
             }
 
@@ -271,12 +272,10 @@ function TradingChart({ liveCandle, markersData }) {
                 tooltip.style.left = param.point.x + 15 + 'px';
                 tooltip.style.top = param.point.y + 15 + 'px';
                 
-                // Semântica Visual
                 const isEntry = hoveredMarker.shape === 'circle';
                 const direction = hoveredMarker.text.includes('LONG') ? '⬆️ LONG' : '⬇️ SHORT';
                 const result = hoveredMarker.text === 'WIN' ? '✅ WIN' : (hoveredMarker.text === 'LOSS' ? '❌ LOSS' : '');
                 
-                // Extração da Fotografia Mental (se os dados foram enviados na api/websocket)
                 const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
                 const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
 
@@ -292,11 +291,10 @@ function TradingChart({ liveCandle, markersData }) {
                     </div>
                 `;
 
-                // 🎯 Desenhar Vetor de Precisão (A -> B)
+                // 🛡️ ANTI-CRASH DA LINHA: Garante que o time da saída é diferente do da entrada
                 if (isEntry) {
-                    // Busca o próximo marcador de saída
                     const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
-                    if (exitMarker) {
+                    if (exitMarker && exitMarker.time !== param.time) {
                         const exitCandle = chartDataMap.current.get(exitMarker.time);
                         exactTradeLine.setData([
                             { time: param.time, value: candleData.close },
@@ -304,9 +302,8 @@ function TradingChart({ liveCandle, markersData }) {
                         ]);
                     }
                 } else {
-                    // Se estiver no hover da Saída, busca o marcador de entrada correspondente
                     const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
-                    if (entryMarker) {
+                    if (entryMarker && entryMarker.time !== param.time) {
                         const entryCandle = chartDataMap.current.get(entryMarker.time);
                         exactTradeLine.setData([
                             { time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close },
@@ -316,7 +313,7 @@ function TradingChart({ liveCandle, markersData }) {
                 }
             } else {
                 tooltip.style.display = 'none';
-                exactTradeLine.setData([]); // Apaga o vetor se sair do candle colorido
+                exactTradeLine.setData([]); 
             }
         });
 
@@ -334,14 +331,13 @@ function TradingChart({ liveCandle, markersData }) {
         };
     }, []); 
 
-    // Efeito Reativo: Atualiza a vela ao vivo e pinta de Neon se houver sinal
     useEffect(() => {
         if (isDataLoaded.current && seriesInstance.current && liveCandle?.time) {
-            chartDataMap.current.set(liveCandle.time, liveCandle); // Atualiza memória
+            chartDataMap.current.set(liveCandle.time, liveCandle); 
 
-            let cColor = '#1e293b'; // Default dimming
+            let cColor = '#1e293b'; 
             const hasAction = markersRef.current.find(m => m.time === liveCandle.time);
-            if (hasAction) cColor = hasAction.color; // Aplica o Neon
+            if (hasAction) cColor = hasAction.color; 
 
             try {
                 seriesInstance.current.update({
@@ -352,7 +348,6 @@ function TradingChart({ liveCandle, markersData }) {
         }
     }, [liveCandle]);
 
-    // Efeito Reativo: Atualiza as Setas sem recarregar o gráfico
     useEffect(() => {
         if (isDataLoaded.current && seriesInstance.current && markersData?.length > 0) {
             try {
@@ -375,7 +370,7 @@ function TradingChart({ liveCandle, markersData }) {
 }
 
 // ==========================================
-// 📊 DASHBOARD PRINCIPAL (O Pai)
+// 📊 DASHBOARD PRINCIPAL 
 // ==========================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
@@ -466,7 +461,6 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg flex flex-col">
-           {/* 🚀 O COMPONENTE DE GRÁFICO ISOLADO COM A AUDITORIA LIMPA ATIVADA! */}
            <TradingChart liveCandle={data.last_candle} markersData={data.markers} />
         </div>
 
