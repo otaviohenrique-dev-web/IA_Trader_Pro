@@ -434,7 +434,9 @@ app.add_middleware(
     allow_methods=["*"], # Permite GET, POST, etc
     allow_headers=["*"], # Permite todos os cabeçalhos
 )
+# 🎯 ENSINANDO O BOT A RESPONDER AO "PING" DO RENDER
 @app.get("/")
+@app.head("/") 
 async def health_check():
     return {"status": "IA Trader Pro Backend Online e Respirando!"}
 
