@@ -33,7 +33,6 @@ const calculateZigZag = (data, thresholdPct = 0.5) => {
   }
   pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
   
-  // Garante tempos únicos para não quebrar o motor
   return pivots.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i).sort((a, b) => a.time - b.time);
 };
 
@@ -157,7 +156,7 @@ function DojoPanel({ state }) {
 }
 
 // ==========================================
-// 📈 COMPONENTE DE GRÁFICO ISOLADO (AUDITORIA LIMPA BLINDADA)
+// 📈 COMPONENTE DE GRÁFICO ISOLADO (ANTI-CRASH)
 // ==========================================
 function TradingChart({ liveCandle, markersData }) {
     const chartContainerRef = useRef(null);
@@ -170,8 +169,6 @@ function TradingChart({ liveCandle, markersData }) {
     
     const markersRef = useRef([]);
     const chartDataMap = useRef(new Map());
-    
-    // 🛡️ ESCUDOS ANTI-LOOP INFINITO
     const currentHoverState = useRef("none"); 
     const lastMarkersCount = useRef(0);
 
@@ -202,8 +199,16 @@ function TradingChart({ liveCandle, markersData }) {
             color: '#38bdf8', lineWidth: 1, lineStyle: 2, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
         });
 
+        // 🛡️ MAGIA ANTI-CRASH: autoscaleInfoProvider: () => null
+        // Isso impede que a linha force a tela a mudar de tamanho, matando o Loop Infinito.
         const exactTradeLine = chart.addSeries(LineSeries, {
-            color: '#a855f7', lineWidth: 2, lineStyle: 3, crosshairMarkerVisible: true, lastValueVisible: false, priceLineVisible: false,
+            color: '#a855f7', 
+            lineWidth: 2, 
+            lineStyle: 3, 
+            crosshairMarkerVisible: true, 
+            lastValueVisible: false, 
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null 
         });
 
         chartInstance.current = chart;
@@ -243,77 +248,80 @@ function TradingChart({ liveCandle, markersData }) {
 
         carregarHistorico();
 
-        // 🎯 MOTOR DE RAIO-X INTERATIVO BLINDADO
+        let requestAnimationFrameId = null;
+
         chart.subscribeCrosshairMove((param) => {
-            const tooltip = tooltipRef.current;
+            if (requestAnimationFrameId) cancelAnimationFrame(requestAnimationFrameId);
             
-            // Fora do gráfico ou sem alvo
-            if (!param.time || param.point.x < 0 || param.point.y < 0 || !tooltip) {
-                tooltip.style.display = 'none';
-                if (currentHoverState.current !== "none") {
-                    exactTradeLine.setData([]); // Limpa a linha
-                    currentHoverState.current = "none"; // Memoriza que já limpou
-                }
-                return;
-            }
-
-            const hoveredMarker = markersRef.current.find(m => m.time === param.time);
-            const candleData = chartDataMap.current.get(param.time) || param.seriesData.get(newSeries);
-
-            if (hoveredMarker && candleData) {
-                tooltip.style.display = 'block';
-                tooltip.style.left = param.point.x + 15 + 'px';
-                tooltip.style.top = param.point.y + 15 + 'px';
+            requestAnimationFrameId = requestAnimationFrame(() => {
+                const tooltip = tooltipRef.current;
                 
-                const isEntry = hoveredMarker.shape === 'circle';
-                const direction = hoveredMarker.text.includes('LONG') ? '⬆️ LONG' : '⬇️ SHORT';
-                const result = hoveredMarker.text === 'WIN' ? '✅ WIN' : (hoveredMarker.text === 'LOSS' ? '❌ LOSS' : '');
-                const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
-                const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
+                if (!param.time || param.point.x < 0 || param.point.y < 0 || !tooltip) {
+                    tooltip.style.display = 'none';
+                    if (currentHoverState.current !== "none") {
+                        exactTradeLine.setData([]); 
+                        currentHoverState.current = "none"; 
+                    }
+                    return;
+                }
 
-                tooltip.innerHTML = `
-                    <div class="font-bold text-sm mb-1 ${hoveredMarker.color === '#22c55e' ? 'text-green-400' : 'text-red-400'}">
-                        ${isEntry ? 'ESTADO IA: ENTRADA' : 'ESTADO IA: SAÍDA'}
-                    </div>
-                    <div class="text-xs text-white mb-1">Ação: ${isEntry ? direction : result}</div>
-                    <div class="text-xs text-slate-300">Preço: $${candleData.close.toFixed(2)}</div>
-                    <div class="mt-2 pt-2 border-t border-slate-600 text-[10px] text-slate-400 font-mono">
-                        RSI: ${rsiText}<br/>
-                        BB Largura: ${bbText}
-                    </div>
-                `;
+                const hoveredMarker = markersRef.current.find(m => m.time === param.time);
+                const candleData = chartDataMap.current.get(param.time) || param.seriesData.get(newSeries);
 
-                // 🛡️ SÓ DESENHA A LINHA SE ESTIVER NUM CANDLE NOVO (Quebra o Loop)
-                if (currentHoverState.current !== param.time) {
-                    currentHoverState.current = param.time; 
+                if (hoveredMarker && candleData) {
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = param.point.x + 15 + 'px';
+                    tooltip.style.top = param.point.y + 15 + 'px';
+                    
+                    const isEntry = hoveredMarker.shape === 'circle';
+                    const direction = hoveredMarker.text.includes('LONG') ? '⬆️ LONG' : '⬇️ SHORT';
+                    const result = hoveredMarker.text === 'WIN' ? '✅ WIN' : (hoveredMarker.text === 'LOSS' ? '❌ LOSS' : '');
+                    const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
+                    const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
 
-                    if (isEntry) {
-                        const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
-                        if (exitMarker && exitMarker.time !== param.time) {
-                            const exitCandle = chartDataMap.current.get(exitMarker.time);
-                            exactTradeLine.setData([
-                                { time: param.time, value: candleData.close },
-                                { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }
-                            ]);
-                        }
-                    } else {
-                        const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
-                        if (entryMarker && entryMarker.time !== param.time) {
-                            const entryCandle = chartDataMap.current.get(entryMarker.time);
-                            exactTradeLine.setData([
-                                { time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close },
-                                { time: param.time, value: candleData.close }
-                            ]);
+                    tooltip.innerHTML = `
+                        <div class="font-bold text-sm mb-1 ${hoveredMarker.color === '#22c55e' ? 'text-green-400' : 'text-red-400'}">
+                            ${isEntry ? 'ESTADO IA: ENTRADA' : 'ESTADO IA: SAÍDA'}
+                        </div>
+                        <div class="text-xs text-white mb-1">Ação: ${isEntry ? direction : result}</div>
+                        <div class="text-xs text-slate-300">Preço: $${candleData.close.toFixed(2)}</div>
+                        <div class="mt-2 pt-2 border-t border-slate-600 text-[10px] text-slate-400 font-mono">
+                            RSI: ${rsiText}<br/>
+                            BB Largura: ${bbText}
+                        </div>
+                    `;
+
+                    if (currentHoverState.current !== param.time) {
+                        currentHoverState.current = param.time; 
+
+                        if (isEntry) {
+                            const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
+                            if (exitMarker && exitMarker.time !== param.time) {
+                                const exitCandle = chartDataMap.current.get(exitMarker.time);
+                                exactTradeLine.setData([
+                                    { time: param.time, value: candleData.close },
+                                    { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }
+                                ]);
+                            }
+                        } else {
+                            const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
+                            if (entryMarker && entryMarker.time !== param.time) {
+                                const entryCandle = chartDataMap.current.get(entryMarker.time);
+                                exactTradeLine.setData([
+                                    { time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close },
+                                    { time: param.time, value: candleData.close }
+                                ]);
+                            }
                         }
                     }
+                } else {
+                    tooltip.style.display = 'none';
+                    if (currentHoverState.current !== "none") {
+                        exactTradeLine.setData([]); 
+                        currentHoverState.current = "none"; 
+                    }
                 }
-            } else {
-                tooltip.style.display = 'none';
-                if (currentHoverState.current !== "none") {
-                    exactTradeLine.setData([]); 
-                    currentHoverState.current = "none"; 
-                }
-            }
+            });
         });
 
         const resizeObserver = new ResizeObserver(entries => {
@@ -324,6 +332,7 @@ function TradingChart({ liveCandle, markersData }) {
         resizeObserver.observe(chartContainerRef.current);
 
         return () => {
+            if (requestAnimationFrameId) cancelAnimationFrame(requestAnimationFrameId);
             resizeObserver.disconnect();
             chart.remove();
             chartInstance.current = null;
@@ -341,7 +350,6 @@ function TradingChart({ liveCandle, markersData }) {
         }
     }, [liveCandle]);
 
-    // 🛡️ SÓ ATUALIZA AS SETAS SE UMA NOVA ORDEM CHEGAR (Quebra o Loop)
     useEffect(() => {
         if (isDataLoaded.current && seriesInstance.current && markersData?.length > 0) {
             if (markersData.length !== lastMarkersCount.current) {
