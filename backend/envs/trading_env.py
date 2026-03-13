@@ -7,7 +7,8 @@ class BitcoinTradingEnv(gym.Env):
         super(BitcoinTradingEnv, self).__init__()
         self.df = df
         
-        # Features calculadas no Dojo
+        # Features calculadas no Dojo (Note o índice do atr_pct para uso posterior)
+        # 0:log_ret, 1:rsi, 2:rsi_slope, 3:macd_diff, 4:bb_pband, 5:bb_width, 6:dist_ema50, 7:dist_ema200, 8:atr_pct
         self.features = df[['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct']].values
         self.closes = df['close'].values
         
@@ -19,11 +20,8 @@ class BitcoinTradingEnv(gym.Env):
         self.position = 0
         self.entry_price = 0.0
         
-        # 🛡️ GESTÃO DE RISCO ALINHADA COM A PRODUÇÃO (server.py)
-        self.fee = 0.0010          # Taxa corrigida para 0.1%
-        self.stop_loss = -0.010    # Punição máxima em -1%
-        
-        # Memória interna da operação para o Trailing Stop
+        self.fee = 0.0010 
+        self.stop_loss = -0.010 
         self.max_profit_pct = 0.0
         
     def reset(self, seed=None, options=None):
@@ -40,21 +38,27 @@ class BitcoinTradingEnv(gym.Env):
         
         reward = 0.0
         current_price = self.closes[self.current_step]
+        current_atr_pct = self.features[self.current_step][8] # Índice 8 é o atr_pct
+        
         target_pos = 1 if action == 1 else (-1 if action == 2 else 0)
         
-        # 🎯 ARMADILHA 1 RESOLVIDA: Nenhuma punição por inatividade.
-        # A IA tem permissão total para não operar e esperar o momento perfeito.
+        # 🎯 REWARD SHAPING 2.0: A ARTE DE FICAR LÍQUIDO
+        # Se a IA escolher ficar de fora (target_pos == 0) e a volatilidade for baixa (< 0.15%), ela ganha um "biscoito".
+        # Isso ensina a IA a AMAR a inatividade durante madrugadas e mercados laterais (Chop Market).
+        if target_pos == 0 and current_atr_pct < 0.0015:
+            reward += 0.05  # Pequeno prêmio contínuo por ter disciplina
         
-        # 🎯 ARMADILHA 3 RESOLVIDA: Desalinhamento Treino vs. Produção
+        # 🎯 PUNIÇÃO POR IMPRUDÊNCIA: Se tentar abrir ordem no Chop Market
+        elif target_pos != 0 and self.position == 0 and current_atr_pct < 0.0015:
+            reward -= 0.5   # Punição severa (equivalente a 0.5% de perda)
+        
         if self.position != 0:
             change_pct = (current_price - self.entry_price) / self.entry_price
             unrealized_pct = change_pct if self.position == 1 else -change_pct
             
-            # Atualiza o pico de lucro da operação atual
             if unrealized_pct > self.max_profit_pct:
                 self.max_profit_pct = unrealized_pct
 
-            # Aplica EXATAMENTE as mesmas regras de Breakeven e Trailing Stop do backend
             dynamic_stop = self.stop_loss
             
             if self.max_profit_pct >= 0.015: 
@@ -62,35 +66,30 @@ class BitcoinTradingEnv(gym.Env):
             elif self.max_profit_pct >= 0.008:
                 dynamic_stop = 0.002
 
-            # O Cão de Guarda atua se o stop dinâmico for atingido
             if unrealized_pct <= dynamic_stop:
-                target_pos = 0 # Força a IA a fechar a posição
+                target_pos = 0 
                 
-        # 3. Execução de Ordens pela IA (Aqui o PnL é julgado)
+        # Execução de Ordens pela IA
         if target_pos != self.position:
             
             # FECHAMENTO DA OPERAÇÃO
             if self.position != 0:
                 change_pct = (current_price - self.entry_price) / self.entry_price
                 pnl_pct = change_pct if self.position == 1 else -change_pct
-                
-                # Descontando as taxas (entrada e saída)
                 real_pnl = pnl_pct - (self.fee * 2)
                 
-                # 🎯 ARMADILHA 2 RESOLVIDA: Reward Hacking
-                # A recompensa (+ ou -) só é entregue AQUI, quando o lucro ou prejuízo é REALIZADO.
-                # Multiplicador alto (100.0) para que o Cérebro sinta fortemente o impacto da vitória ou derrota.
+                # Se o fechamento resultar em lucro líquido, prêmio massivo. Se for loss, dor.
                 reward += (real_pnl * 100.0) 
                 
             # ABERTURA DA OPERAÇÃO
             if target_pos != 0:
                 self.entry_price = current_price
-                self.max_profit_pct = 0.0 # Reseta a memória para a nova trade
+                self.max_profit_pct = 0.0 
                 
-                # Pequena punição inicial pela taxa para inibir overtrading (ensina que abrir ordem custa caro)
+                # Punição inicial pela taxa (custo de entrada)
                 reward -= (self.fee * 5.0) 
                 
-            self.position = target_pos
-            
+        self.position = target_pos
+        
         obs = self.features[self.current_step]
         return obs, reward, done, False, {}
