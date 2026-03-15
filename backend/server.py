@@ -161,12 +161,37 @@ async def sniper_loop():
                 last_saved_candle_ts = closed_candle_ts
                 print(f">>> 💾 Mercado Logado no CSV. Vela: {pd.to_datetime(closed_candle_ts, unit='ms')}")
 
-            # --- PROCESSAMENTO DE INDICADORES ---
+         # --- PROCESSAMENTO DE INDICADORES ---
             df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
             df['rsi'] = ta.rsi(df['close'], length=14)
             df['rsi_slope'] = df['rsi'].diff()
+            
+            # 🛡️ Inicialização preventiva para evitar erro de Index
+            df['bb_pband'] = 0.0
+            df['bb_width'] = 0.0
+
             macd = ta.macd(df['close'])
-            df['macd_diff'] = macd[[c for c in macd.columns if c.startswith('MACDh') or c.startswith('MACDH')][0]] if macd is not None else 0
+            if macd is not None:
+                macd_col = [c for c in macd.columns if c.startswith('MACDh') or c.startswith('MACDH')][0]
+                df['macd_diff'] = macd[macd_col]
+            else:
+                df['macd_diff'] = 0.0
+
+            # Cálculo das Bandas de Bollinger
+            bb = ta.bbands(df['close'], length=20, std=2)
+            if bb is not None:
+                try:
+                    # Identifica as colunas dinamicamente (BBU, BBL, BBB)
+                    upper_col = [c for c in bb.columns if c.startswith('BBU')][0]
+                    lower_col = [c for c in bb.columns if c.startswith('BBL')][0]
+                    width_col = [c for c in bb.columns if c.startswith('BBB')][0]
+                    
+                    # %B = (Preço - Inferior) / (Superior - Inferior)
+                    df['bb_pband'] = (df['close'] - bb[lower_col]) / (bb[upper_col] - bb[lower_col])
+                    df['bb_width'] = bb[width_col]
+                except Exception:
+                    pass # Mantém 0.0 se falhar
+
             df['sma200'] = ta.sma(df['close'], length=200)
             df['ema50'] = ta.ema(df['close'], length=50)
             df['ema200'] = ta.ema(df['close'], length=200)
@@ -175,8 +200,8 @@ async def sniper_loop():
             df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
             df['atr_pct'] = df['atr'] / df['close']
 
+            # Limpa NaNs (essencial para o modelo)
             df_clean = df.dropna().copy()
-
             if model and len(df_clean) > 0:
                 if startup_phase:
                     state["status"] = "REBOOT: EXECUTANDO BACKTEST..."
