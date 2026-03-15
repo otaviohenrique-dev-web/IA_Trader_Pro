@@ -1,11 +1,38 @@
+# Ambientes Virtuais
 backend/venv/
 backend/.venv/
 .venv/
 venv/
+env/
+
+# Dependências e Builds
 node_modules/
 .next/
+dist/
+build/
+
+# Python Cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Variáveis de Ambiente (Segurança)
 .env
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dados do Bot (Arquivos Pesados)
+backend/data/*.csv
 data/live_market_data.csv
+
+# Inteligência Artificial (Modelos e Logs)
+# Armazenamos via Dojo, não via Git
+backend/models/*.zip
+backend/tensorboard_logs/
+
+# Diversos
+.DS_Store
+Thumbs.db
