@@ -312,7 +312,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-@app.get("/", methods=["GET", "HEAD"])
+@app.get("/")
+@app.head("/")
 async def health_check():
     return {"status": "IA Trader Pro REBOOT Online!"}
 
