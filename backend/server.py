@@ -263,7 +263,7 @@ async def sniper_loop():
                             target_pos = 0  
                             state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🛡️ STOP ({unrealized_pct*100:.2f}%)"})
 
-                    # --- EXECUÇÃO ---
+                   # --- EXECUÇÃO ---
                     if target_pos != position:
                         if position != 0: 
                             pnl = (balance * ((current_price - entry_price) / entry_price)) if position == 1 else (balance * -((current_price - entry_price) / entry_price))
@@ -271,6 +271,13 @@ async def sniper_loop():
                             state["balance"] = balance
                             cor = "🟢" if pnl >= 0 else "🔴"
                             state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] {cor} FECHOU | PnL: ${pnl:.2f}"})
+                            
+                            # 🎨 RESTAURANDO: Marcadores de Fechamento (WIN/LOSS) no Gráfico
+                            fechamento_cor = "#22c55e" if pnl > 0 else "#ef4444"
+                            fechamento_texto = "WIN" if pnl > 0 else "LOSS"
+                            fechamento_pos = "belowBar" if pnl > 0 else "aboveBar"
+                            state["markers"].append({"time": current_ts, "position": fechamento_pos, "color": fechamento_cor, "shape": "square", "text": fechamento_texto})
+
                             if pnl > 0: wins += 1
                             else: losses += 1
                             state["adaptation"]["wins"], state["adaptation"]["losses"] = wins, losses
@@ -281,6 +288,13 @@ async def sniper_loop():
                             entry_price, max_profit_pct = current_price, 0.0
                             label = "LONG 🟢" if target_pos == 1 else "SHORT 🔴"
                             state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 ABRIU {label} em ${current_price:.2f}"})
+                            
+                            # 🎨 RESTAURANDO: Marcadores de Abertura (LONG/SHORT) no Gráfico
+                            abertura_cor = "#22c55e" if target_pos == 1 else "#ef4444"
+                            abertura_pos = "belowBar" if target_pos == 1 else "aboveBar"
+                            abertura_texto = "LONG" if target_pos == 1 else "SHORT"
+                            state["markers"].append({"time": current_ts, "position": abertura_pos, "color": abertura_cor, "shape": "circle", "text": abertura_texto})
+
                         position = target_pos
                         state["in_position"] = (position != 0)
                         state["current_position"], state["entry_price"] = position, entry_price
@@ -291,8 +305,8 @@ async def sniper_loop():
             state["last_candle"] = state["chart_data"][-1]
             state["uptime"] = get_uptime()
             
-            gc.collect() 
-            await asyncio.sleep(10)
+            # 🧹 RESTAURANDO: Limpeza da memória dos marcadores para não travar o navegador
+            state["markers"] = state["markers"][-100:]
 
         except Exception as e:
             print(f"❌ Erro no Loop: {e}")
