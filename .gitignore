@@ -30,9 +30,12 @@ data/live_market_data.csv
 
 # Inteligência Artificial (Modelos e Logs)
 # Armazenamos via Dojo, não via Git
-backend/models/*.zip
 backend/tensorboard_logs/
+tensorboard_logs
+backend/models/sniper_pro_gen_7.zip
 
 # Diversos
 .DS_Store
 Thumbs.db
+
+reconstruct_gen_7.py

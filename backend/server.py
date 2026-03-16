@@ -349,15 +349,50 @@ async def download_dados(senha: str):
 async def upload_cerebro(senha: str, file: UploadFile = File(...)):
     admin_pass = os.environ.get("ADMIN_PASSWORD", "senha_padrao_secreta")
     if senha != admin_pass: raise HTTPException(status_code=403, detail="Acesso Negado.")
+    
     global balance, session_start_balance, kill_switch_active, wins, losses, lstm_states, episode_starts
-    new_gen = state["adaptation"]["generation"] + 1
+    
+    current_gen = state["adaptation"]["generation"]
+    new_gen = current_gen + 1
     new_path = f"models/sniper_pro_gen_{new_gen}.zip"
-    with open(new_path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
+    horario = datetime.now().strftime("%H:%M:%S")
+
+    # 🧬 LIMPANDO O HISTÓRICO E DEMARCANDO A NOVA ERA
+    state["order_book"] = [] # <--- LIMPA TUDO
+    state["order_book"].insert(0, {"text": "--------------------------------------------------"})
+    state["order_book"].insert(0, {"text": f"🚀 [SISTEMA] ERA DA GERAÇÃO {new_gen} INICIADA"})
+    state["order_book"].insert(0, {"text": f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"})
+    state["order_book"].insert(0, {"text": "--------------------------------------------------"})
+    
+    with open(new_path, "wb") as buffer: 
+        shutil.copyfileobj(file.file, buffer)
+    
     load_brain(new_path)
-    lstm_states, episode_starts = None, np.ones((1,), dtype=bool)
-    wins, losses, session_start_balance, kill_switch_active = 0, 0, balance, False 
-    state["adaptation"].update({"wins": 0, "losses": 0, "current_win_rate": 0.0, "generation": new_gen, "learning_state": "ATIVO"})
-    return {"mensagem": f"Geração {new_gen} ativa!"}
+    lstm_states = None 
+    episode_starts = np.ones((1,), dtype=bool)
+    
+    # Resetando estatísticas para o novo cérebro
+    wins, losses = 0, 0
+    session_start_balance = balance 
+    kill_switch_active = False 
+    
+    state.update({
+        "balance": balance,
+        "in_position": False,
+        "entry_price": 0.0,
+        "current_position": 0
+    })
+    
+    state["adaptation"].update({
+        "wins": 0, "losses": 0, "current_win_rate": 0.0,
+        "generation": new_gen, "learning_state": "ATIVO"
+    })
+
+    if os.path.exists(DATA_PATH): 
+        os.rename(DATA_PATH, f"data/archive_reboot_gen_{current_gen}.csv")
+        
+    return {"mensagem": f"Evolução Concluída: Geração {new_gen} ativa!"}
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
