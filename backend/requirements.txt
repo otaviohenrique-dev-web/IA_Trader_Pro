@@ -4,12 +4,10 @@ websockets
 python-dotenv
 aiohttp
 google-genai
-cryptopanic_api
 ccxt
 pandas
 numpy
 matplotlib
-lightweight-charts
 python-multipart
 stable-baselines3
 gymnasium
