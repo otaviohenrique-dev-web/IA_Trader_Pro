@@ -252,16 +252,19 @@ async def sniper_loop():
                             target_pos = 0 
                             state["status"] = "💤 MERCADO LATERAL"
                         elif consecutive_signals >= 2:
-                            if act_idx == 1: 
-                                if macro_trend == 1: target_pos = 1
-                                else: state["status"] = "🛡️ MACRO: BLOQUEANDO LONG (TENDÊNCIA DE BAIXA)"
-                            elif act_idx == 2: 
-                                if macro_trend == -1: target_pos = -1
-                                else: state["status"] = "🛡️ MACRO: BLOQUEANDO SHORT (TENDÊNCIA DE ALTA)"
-                            consecutive_signals = 0
+                            if act_idx == 1: target_pos = 1 if macro_trend == 1 else 0
+                            elif act_idx == 2: target_pos = -1 if macro_trend == -1 else 0
+                            consecutive_signals = 0 
                         else:
                             state["status"] = f"🔍 ANALISANDO {'LONG' if act_idx == 1 else 'SHORT'}..."
 
+                        # 🛡️ O FREIO DE MÃO (NOVO)
+                        # Se já estamos em posição, não deixamos a IA mudar de ideia antes de 15 min (900 seg)
+                        if position != 0:
+                            time_in_trade = current_ts - last_entry_ts
+                            if time_in_trade < 900: 
+                                target_pos = position  # Força a manter a posição atual
+                                state["status"] = f"⏳ TRAVA ATIVA: Segurando posição ({(900 - time_in_trade)//60} min restantes)"
                     # --- GESTÃO DE RISCO ---
                     if not warming_up and position != 0:
                         change_pct = (current_price - entry_price) / entry_price
@@ -299,6 +302,7 @@ async def sniper_loop():
                         if target_pos != 0:
                             balance -= (balance * FEE_RATE)
                             entry_price, max_profit_pct = current_price, 0.0
+                            last_entry_ts = current_ts  # <--- MARCA O RELÓGIO AQUI
                             label = "LONG 🟢" if target_pos == 1 else "SHORT 🔴"
                             state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 ABRIU {label} em ${current_price:.2f}"})
                             
