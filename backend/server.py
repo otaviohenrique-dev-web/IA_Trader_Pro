@@ -151,7 +151,7 @@ client = genai.Client(api_key=GEMINI_KEY)
 
 # --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
 async def fetch_btc_news():
-    api_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
+    api_url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
     
     # MÁSCARA: Finge ser um navegador Windows/Chrome para passar pelo Cloudflare
     headers = {
@@ -274,14 +274,12 @@ async def analyst_market_loop():
             print(f"❌ Erro no Analista: {e}")
             await asyncio.sleep(60)
 
-
 # --- LOOP PRINCIPAL DO TRADER (SNIPER) ---
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
     global kill_switch_active, last_entry_ts, startup_phase, startup_timer, warming_up, warmup_counter, consecutive_signals, last_signal
 
-    # Configuração Binance US (Perfeito para os servidores americanos do Render)
-    exchange = ccxt.binanceus({
+    exchange = ccxt.kraken({
         'enableRateLimit': True,
         'timeout': 30000
     })
@@ -389,14 +387,40 @@ async def sniper_loop():
 
                 # --- 3. EXECUÇÃO ÚNICA (FINANCEIRO + VISUAL) ---
                 if target_pos != position:
-                    # ABRIR POSIÇÃO
-                    if position == 0 and target_pos != 0 and not warming_up:
+                    
+                    # 1. SE JÁ ESTÁ POSICIONADO, FECHA A POSIÇÃO PRIMEIRO
+                    if position != 0:
+                        pnl = (balance * ((current_price - entry_price)/entry_price)) if position == 1 else (balance * -((current_price - entry_price)/entry_price))
+                        balance += (pnl - (balance * FEE_RATE))
+                        
+                        # [MARKER] Registro de Saída
+                        state["markers"].append({
+                            "time": int(last_row['timestamp'].timestamp()),
+                            "position": "aboveBar",
+                            "color": "#facc15", 
+                            "shape": "square",
+                            "text": f"EXIT: {'WIN' if pnl > 0 else 'LOSS'}"
+                        })
+                        
+                        resultado_texto = "WIN ✅" if pnl > 0 else "LOSS ❌"
+                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🏁 FECHOU {'LONG' if position==1 else 'SHORT'} | PnL: ${pnl:.2f} ({resultado_texto})"})
+                        
+                        if len(state["order_book"]) > 50: state["order_book"].pop()
+                        
+                        state["balance"] = balance
+                        state["floating_pnl"] = 0.0
+                        if pnl > 0: wins += 1
+                        else: losses += 1
+                        position = 0 # Posição zerada e livre!
+
+                    # 2. SE O ALVO EXIGE UMA NOVA POSIÇÃO, ELE ABRE AGORA
+                    if target_pos != 0 and not warming_up:
                         balance -= (balance * FEE_RATE)
                         entry_price = current_price
                         last_entry_ts = int(time.time()) 
                         position = target_pos
                         
-                        # [MARKER] Registro de Entrada no Gráfico (TradingView)
+                        # [MARKER] Registro de Entrada
                         state["markers"].append({
                             "time": int(last_row['timestamp'].timestamp()),
                             "position": "belowBar" if position == 1 else "aboveBar",
@@ -405,34 +429,6 @@ async def sniper_loop():
                             "text": f"ENTRY {'LONG' if position==1 else 'SHORT'}"
                         })
                         state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 ABRIU {'LONG' if position==1 else 'SHORT'} em ${current_price:.2f}"})
-
-                    # FECHAR POSIÇÃO
-                    elif position != 0 and target_pos == 0:
-                        pnl = (balance * ((current_price - entry_price)/entry_price)) if position == 1 else (balance * -((current_price - entry_price)/entry_price))
-                        balance += (pnl - (balance * FEE_RATE))
-                        
-                        # [MARKER] Registro de Saída no Gráfico
-                        state["markers"].append({
-                            "time": int(last_row['timestamp'].timestamp()),
-                            "position": "aboveBar",
-                            "color": "#facc15", # Amarelo para Saída
-                            "shape": "square",
-                            "text": f"EXIT: {'WIN' if pnl > 0 else 'LOSS'}"
-                        })
-                        
-                        # 🟢 [NOVO] REGISTRO DE FECHAMENTO NO LIVRO DE AÇÕES
-                        resultado_texto = "WIN ✅" if pnl > 0 else "LOSS ❌"
-                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🏁 FECHOU {'LONG' if position==1 else 'SHORT'} | PnL: ${pnl:.2f} ({resultado_texto})"})
-                        
-                        # Limite de segurança: Mantém apenas os 50 registros mais recentes no livro para não travar a memória
-                        if len(state["order_book"]) > 50:
-                            state["order_book"].pop()
-                        
-                        state["balance"] = balance
-                        state["floating_pnl"] = 0.0
-                        if pnl > 0: wins += 1
-                        else: losses += 1
-                        position = 0
 
                 # Sincronização Final do Estado
                 state.update({
@@ -477,7 +473,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 async def get_historico():
     try:
         if exchange is None:
-            temp_ex = ccxt.binanceus({'enableRateLimit': True, 'timeout': 30000})
+            temp_ex = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
             ohlcv = await temp_ex.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=1000)
             await temp_ex.close()
             return [{"time": int(r[0]/1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
