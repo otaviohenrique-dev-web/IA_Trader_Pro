@@ -537,6 +537,10 @@ async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = H
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar: {str(e)}")
     
+@app.get("/")
+async def root():
+    return {"status": "IA Trader Pro API Online 🟢", "versao": "3.0.1"}
+
 # ==========================================
 # INICIALIZAÇÃO DO SERVIDOR
 # ==========================================
