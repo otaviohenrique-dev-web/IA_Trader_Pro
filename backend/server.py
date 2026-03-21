@@ -151,21 +151,24 @@ client = genai.Client(api_key=GEMINI_KEY)
 
 # --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
 async def fetch_btc_news():
-    # Usando EXATAMENTE a rota v2 developer fornecida na documentação
     api_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
+    
+    # MÁSCARA: Finge ser um navegador Windows/Chrome para passar pelo Cloudflare
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=15) as resp:
+            # Adiciona o headers=headers na requisição
+            async with session.get(api_url, headers=headers, timeout=15) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     results = data.get('results', [])
                     
                     if results:
-                        # Extraímos os títulos para o letreiro
                         news_list = [f" {p['title']} •" for p in results[:10]]
                         return news_list
-                    
                     return []
                 else:
                     print(f">>> ❌ Erro na API CryptoPanic (Status {resp.status}).")
@@ -280,7 +283,7 @@ async def sniper_loop():
     # SOLUÇÃO DEFINITIVA PARA O RENDER (US IP)
     # Como o bot faz Paper Trading, usamos a Binance US para ler o mercado.
     # O gráfico do BTC/USDT é o mesmo e o Render não será bloqueado.
-    exchange = ccxt.binanceus({
+    exchange = ccxt.bybit({
         'enableRateLimit': True,
         'timeout': 30000
     })
@@ -477,7 +480,7 @@ async def get_historico():
     try:
         # Usa a mesma lógica imune a bloqueios americanos para enviar os dados pro Frontend
         if exchange is None:
-            temp_ex = ccxt.binanceus({'enableRateLimit': True, 'timeout': 30000})
+            temp_ex = ccxt.bybit({'enableRateLimit': True, 'timeout': 30000})
             ohlcv = await temp_ex.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=1000)
             await temp_ex.close()
             return [{"time": int(r[0]/1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
