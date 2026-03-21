@@ -11,5 +11,5 @@ matplotlib
 python-multipart
 stable-baselines3
 gymnasium
-torch
+torch --index-url https://download.pytorch.org/whl/cpu
 pandas-ta-classic

@@ -533,5 +533,7 @@ async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = H
 # ==========================================
 if __name__ == "__main__":
     import uvicorn
-    # Se estiver rodando local, usa a porta 10000. No Render, ele puxa a porta automática.
-    uvicorn.run("server:app", host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), reload=True)
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    # Importante: usar o formato de string "server:app" para o Render
+    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
