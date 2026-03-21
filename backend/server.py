@@ -97,6 +97,8 @@ exchange = None
 lstm_states = None 
 episode_starts = np.ones((1,), dtype=bool)
 feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct']
+last_analysis_time = 0
+cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural..."}
 
 # --- FUNÇÕES DE SUPORTE ---
 
@@ -174,6 +176,16 @@ async def fetch_btc_news():
 
 async def analyze_sentiment_with_llm(headlines):
     """Usa o modelo Gemini 3 Flash Preview calibrado para ignorar ruído."""
+    
+    # Puxa as variáveis globais que você já colocou no topo do arquivo
+    global last_analysis_time, cached_analysis
+    current_time = time.time()
+    
+    # ⏳ TRAVA DO CACHE: 1800 segundos = 30 minutos
+    if current_time - last_analysis_time < 1800:
+        print(">>> ⏳ IA em Cooldown. Retornando análise de risco do cache para economizar cota.")
+        return cached_analysis
+
     if not headlines:
         return {"score": 0.1, "status": "SAFE", "reason": "Mercado calmo (Sem notícias)"}
     
@@ -213,27 +225,17 @@ async def analyze_sentiment_with_llm(headlines):
             data["status"] = "DANGER"
             
         data["score"] = score
+        
+        # 💾 SALVA O RESULTADO NO CACHE E ATUALIZA O RELÓGIO ANTES DE RETORNAR
+        cached_analysis = data
+        last_analysis_time = current_time
+        
         return data
+        
     except Exception as e:
         print(f"⚠️ Erro na análise da IA: {e}")
-        return {"score": 0.0, "status": "SAFE", "reason": "Análise Offline"}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        # Se a cota estourar ou a API cair, ele mantém o bot rodando com o último status seguro salvo
+        return cached_analysis
 
 async def analyst_market_loop():
     print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
@@ -275,7 +277,22 @@ async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
     global kill_switch_active, last_entry_ts, startup_phase, startup_timer, warming_up, warmup_counter, consecutive_signals, last_signal
 
-    exchange = ccxt.binance({'enableRateLimit': True})
+    # Configuração de Guerra para o Render (Evita Erro 451 de Localização Restrita)
+    exchange = ccxt.binance({
+        'enableRateLimit': True,
+        'timeout': 30000,
+        'urls': {
+            'api': {
+                'public': 'https://api.binance.me/api/v3',
+                'private': 'https://api.binance.me/api/v3',
+            }
+        },
+        'options': {
+            'adjustForTimeDifference': True,
+            'recvWindow': 10000,
+        }
+    })
+
     last_saved_candle_ts = 0 
     last_fetch_ts = 0
 

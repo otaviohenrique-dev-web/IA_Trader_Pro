@@ -4,38 +4,64 @@ backend/.venv/
 .venv/
 venv/
 env/
+virtualenv/
 
-# Dependências e Builds
+# Dependências e Builds (Node e Python)
 node_modules/
 .next/
 dist/
 build/
+*.egg-info/
+nosetests.xml
+coverage.xml
+htmlcov/
 
-# Python Cache
+# Python Cache & Compilados
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
+.mypy_cache/
 
-# Variáveis de Ambiente (Segurança)
+# Variáveis de Ambiente (Segurança Crítica)
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*.local
+*.env
 
-# Dados do Bot (Arquivos Pesados)
+# Dados do Bot (Arquivos Dinâmicos e CSVs)
 backend/data/*.csv
 data/live_market_data.csv
+*.log
+backend/*.log
 
 # Inteligência Artificial (Modelos e Logs)
-# Armazenamos via Dojo, não via Git
+# O treinamento e os pesos são injetados via Dojo
 backend/tensorboard_logs/
-tensorboard_logs
-backend/models/sniper_pro_gen_7.zip
+tensorboard_logs/
+backend/models/*.zip
+backend/models/*.pth
+backend/models/*.h5
 
-# Diversos
+# Scripts de Treinamento e Reconstrução
+# (Proteção de Propriedade Intelectual do Modelo)
+reconstruct_gen_7.py
+train_*.py
+test_*.py
+
+# Configurações de Editores e Sistema
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
+desktop.ini
 
-reconstruct_gen_7.py
+# Logs do Servidor (Uvicorn/Gunicorn)
+access.log
+error.log
