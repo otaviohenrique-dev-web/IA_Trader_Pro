@@ -160,7 +160,7 @@ async def fetch_btc_news():
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Adiciona o headers=headers na requisição
+            # Adicionamos o headers aqui
             async with session.get(api_url, headers=headers, timeout=15) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -280,10 +280,8 @@ async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
     global kill_switch_active, last_entry_ts, startup_phase, startup_timer, warming_up, warmup_counter, consecutive_signals, last_signal
 
-    # SOLUÇÃO DEFINITIVA PARA O RENDER (US IP)
-    # Como o bot faz Paper Trading, usamos a Binance US para ler o mercado.
-    # O gráfico do BTC/USDT é o mesmo e o Render não será bloqueado.
-    exchange = ccxt.bybit({
+    # Configuração Binance US (Perfeito para os servidores americanos do Render)
+    exchange = ccxt.binanceus({
         'enableRateLimit': True,
         'timeout': 30000
     })
@@ -478,9 +476,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 @app.get("/api/historico")
 async def get_historico():
     try:
-        # Usa a mesma lógica imune a bloqueios americanos para enviar os dados pro Frontend
         if exchange is None:
-            temp_ex = ccxt.bybit({'enableRateLimit': True, 'timeout': 30000})
+            # Usando a Binance US aqui também para o gráfico do frontend
+            temp_ex = ccxt.binanceus({'enableRateLimit': True, 'timeout': 30000})
             ohlcv = await temp_ex.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=1000)
             await temp_ex.close()
             return [{"time": int(r[0]/1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
