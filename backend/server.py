@@ -150,17 +150,18 @@ from google import genai
 client = genai.Client(api_key=GEMINI_KEY)
 
 # --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
+# --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
 async def fetch_btc_news():
+    # 🟢 CORREÇÃO: URL oficial da API v1
     api_url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
     
-    # MÁSCARA: Finge ser um navegador Windows/Chrome para passar pelo Cloudflare
+    # MÁSCARA: Finge ser um navegador Windows/Chrome
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Adicionamos o headers aqui
             async with session.get(api_url, headers=headers, timeout=15) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -176,6 +177,47 @@ async def fetch_btc_news():
     except Exception as e:
         print(f">>> ❌ Falha na conexão de notícias: {e}")
         return []
+
+async def analyst_market_loop():
+    print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
+    
+    # 🟢 NOVO: Máscara também aplicada na busca geral
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
+    while True:
+        try:
+            headlines = await fetch_btc_news()
+            
+            # Se a busca por BTC vier vazia, busca notícias GERAIS
+            if not headlines:
+                general_url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(general_url, headers=headers, timeout=15) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            headlines = [f" {p['title']} •" for p in data.get('results', [])[:10]]
+
+            analysis = await analyze_sentiment_with_llm(headlines)
+            
+            state["news_agent"].update({
+                "status": analysis["status"],
+                "sentiment_score": analysis["score"],
+                "risk_level": analysis["status"],
+                "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
+            })
+            
+            global kill_switch_active
+            if analysis["status"] == "SAFE":
+                kill_switch_active = False
+            
+            print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
+            await asyncio.sleep(600) # Atualiza a cada 10 min
+            
+        except Exception as e:
+            print(f"❌ Erro no Analista: {e}")
+            await asyncio.sleep(60)
 
 async def analyze_sentiment_with_llm(headlines):
     """Usa o modelo Gemini 3 Flash Preview calibrado para ignorar ruído."""
@@ -239,40 +281,6 @@ async def analyze_sentiment_with_llm(headlines):
         print(f"⚠️ Erro na análise da IA: {e}")
         # Se a cota estourar ou a API cair, ele mantém o bot rodando com o último status seguro salvo
         return cached_analysis
-
-async def analyst_market_loop():
-    print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
-    while True:
-        try:
-            headlines = await fetch_btc_news()
-            
-            # Se a busca por BTC vier vazia, tentamos buscar notícias GERAIS para não deixar o letreiro parado
-            if not headlines:
-                general_url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(general_url) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            headlines = [f" {p['title']} •" for p in data.get('results', [])[:10]]
-
-            analysis = await analyze_sentiment_with_llm(headlines)
-            
-            state["news_agent"].update({
-                "status": analysis["status"],
-                "sentiment_score": analysis["score"],
-                "risk_level": analysis["status"],
-                "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
-            })
-            
-            global kill_switch_active
-            if analysis["status"] == "SAFE":
-                kill_switch_active = False
-            
-            print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
-            await asyncio.sleep(600) # Atualiza a cada 10 min para não ser banido
-        except Exception as e:
-            print(f"❌ Erro no Analista: {e}")
-            await asyncio.sleep(60)
 
 # --- LOOP PRINCIPAL DO TRADER (SNIPER) ---
 async def sniper_loop():
