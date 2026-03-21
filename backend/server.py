@@ -477,7 +477,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 async def get_historico():
     try:
         if exchange is None:
-            # Usando a Binance US aqui também para o gráfico do frontend
             temp_ex = ccxt.binanceus({'enableRateLimit': True, 'timeout': 30000})
             ohlcv = await temp_ex.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=1000)
             await temp_ex.close()
