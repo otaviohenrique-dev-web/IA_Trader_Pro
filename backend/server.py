@@ -150,12 +150,11 @@ from google import genai
 client = genai.Client(api_key=GEMINI_KEY)
 
 # --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
-# --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
 async def fetch_btc_news():
-    # 🟢 CORREÇÃO: URL oficial da API v1
-    api_url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
+    # 🟢 URL original e correta da V2 (como está na doc!)
+    api_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
     
-    # MÁSCARA: Finge ser um navegador Windows/Chrome
+    # MÁSCARA: Finge ser um navegador Windows/Chrome para passar pelo Cloudflare (Erro 502)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
@@ -178,10 +177,11 @@ async def fetch_btc_news():
         print(f">>> ❌ Falha na conexão de notícias: {e}")
         return []
 
+# (A função analyze_sentiment_with_llm continua intacta aqui no meio)
+
 async def analyst_market_loop():
     print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
     
-    # 🟢 NOVO: Máscara também aplicada na busca geral
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
@@ -190,9 +190,9 @@ async def analyst_market_loop():
         try:
             headlines = await fetch_btc_news()
             
-            # Se a busca por BTC vier vazia, busca notícias GERAIS
             if not headlines:
-                general_url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
+                # 🟢 Voltando para a V2 aqui no fallback geral também!
+                general_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
                 async with aiohttp.ClientSession() as session:
                     async with session.get(general_url, headers=headers, timeout=15) as resp:
                         if resp.status == 200:
@@ -213,7 +213,7 @@ async def analyst_market_loop():
                 kill_switch_active = False
             
             print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
-            await asyncio.sleep(600) # Atualiza a cada 10 min
+            await asyncio.sleep(600) 
             
         except Exception as e:
             print(f"❌ Erro no Analista: {e}")
