@@ -178,6 +178,10 @@ async def fetch_btc_news():
 
 async def analyst_market_loop():
     print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
+    
+    # DECLARAÇÃO GLOBAL AQUI NO TOPO (Evita o SyntaxError)
+    global kill_switch_active
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
@@ -195,12 +199,12 @@ async def analyst_market_loop():
                     "risk_level": "MODO TÉCNICO",
                     "last_headlines": ["⚠️ ALERTA: API DE NOTÍCIAS ESGOTADA - TRABALHANDO 100% VIA GRÁFICOS (TA) •"]
                 })
-                global kill_switch_active
+                # Já declaramos lá em cima, agora é só usar
                 kill_switch_active = False
-                await asyncio.sleep(3600) # Dorme por 1 hora antes de tentar de novo
+                await asyncio.sleep(3600) # Dorme por 1 hora
                 continue
                 
-            # Resto da lógica normal se a API estiver funcionando
+            # Resto da lógica normal
             if not headlines:
                 general_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
                 async with aiohttp.ClientSession() as session:
@@ -218,44 +222,6 @@ async def analyst_market_loop():
                 "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
             })
             
-            if analysis["status"] == "SAFE":
-                kill_switch_active = False
-            
-            print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
-            await asyncio.sleep(600) 
-            
-        except Exception as e:
-            print(f"❌ Erro no Analista: {e}")
-            await asyncio.sleep(60)
-    print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    
-    while True:
-        try:
-            headlines = await fetch_btc_news()
-            
-            if not headlines:
-                # 🟢 Voltando para a V2 aqui no fallback geral também!
-                general_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(general_url, headers=headers, timeout=15) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            headlines = [f" {p['title']} •" for p in data.get('results', [])[:10]]
-
-            analysis = await analyze_sentiment_with_llm(headlines)
-            
-            state["news_agent"].update({
-                "status": analysis["status"],
-                "sentiment_score": analysis["score"],
-                "risk_level": analysis["status"],
-                "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
-            })
-            
-            global kill_switch_active
             if analysis["status"] == "SAFE":
                 kill_switch_active = False
             
