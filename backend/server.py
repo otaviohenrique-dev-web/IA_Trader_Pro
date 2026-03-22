@@ -149,12 +149,8 @@ from google import genai
 # O cliente puxa a chave direto ou podemos passar explicitamente
 client = genai.Client(api_key=GEMINI_KEY)
 
-# --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
 async def fetch_btc_news():
-    # 🟢 URL original e correta da V2 (como está na doc!)
     api_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&currencies=BTC"
-    
-    # MÁSCARA: Finge ser um navegador Windows/Chrome para passar pelo Cloudflare (Erro 502)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     }
@@ -165,11 +161,12 @@ async def fetch_btc_news():
                 if resp.status == 200:
                     data = await resp.json()
                     results = data.get('results', [])
-                    
                     if results:
-                        news_list = [f" {p['title']} •" for p in results[:10]]
-                        return news_list
+                        return [f" {p['title']} •" for p in results[:10]]
                     return []
+                elif resp.status == 429:
+                    # Cota estourada!
+                    return ["API_ESGOTADA"]
                 else:
                     print(f">>> ❌ Erro na API CryptoPanic (Status {resp.status}).")
                     return []
@@ -177,9 +174,59 @@ async def fetch_btc_news():
         print(f">>> ❌ Falha na conexão de notícias: {e}")
         return []
 
-# (A função analyze_sentiment_with_llm continua intacta aqui no meio)
+# (Mantenha a função analyze_sentiment_with_llm intacta aqui no meio)
 
 async def analyst_market_loop():
+    print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
+    while True:
+        try:
+            headlines = await fetch_btc_news()
+            
+            # --- CIRCUITO DE PROTEÇÃO CONTRA COTA ESGOTADA ---
+            if headlines and headlines[0] == "API_ESGOTADA":
+                print(">>> ⚠️ API de Notícias Esgotada. Entrando em MODO 100% TÉCNICO.")
+                state["news_agent"].update({
+                    "status": "SAFE",
+                    "sentiment_score": 0.0,
+                    "risk_level": "MODO TÉCNICO",
+                    "last_headlines": ["⚠️ ALERTA: API DE NOTÍCIAS ESGOTADA - TRABALHANDO 100% VIA GRÁFICOS (TA) •"]
+                })
+                global kill_switch_active
+                kill_switch_active = False
+                await asyncio.sleep(3600) # Dorme por 1 hora antes de tentar de novo
+                continue
+                
+            # Resto da lógica normal se a API estiver funcionando
+            if not headlines:
+                general_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(general_url, headers=headers, timeout=15) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            headlines = [f" {p['title']} •" for p in data.get('results', [])[:10]]
+
+            analysis = await analyze_sentiment_with_llm(headlines)
+            
+            state["news_agent"].update({
+                "status": analysis["status"],
+                "sentiment_score": analysis["score"],
+                "risk_level": analysis["status"],
+                "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
+            })
+            
+            if analysis["status"] == "SAFE":
+                kill_switch_active = False
+            
+            print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
+            await asyncio.sleep(600) 
+            
+        except Exception as e:
+            print(f"❌ Erro no Analista: {e}")
+            await asyncio.sleep(60)
     print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
     
     headers = {
@@ -462,6 +509,18 @@ async def sniper_loop():
 
         except Exception as e:
             print(f"❌ Erro no Loop Sniper: {e}")
+            
+            # Auto-recuperação de conexão perdida (SSL / Connection Reset)
+            error_str = str(e).lower()
+            if "ssl" in error_str or "closed" in error_str or "connectionreset" in error_str:
+                print(">>> 🔄 Falha de rede detectada. Reiniciando cliente da corretora...")
+                try: 
+                    await exchange.close()
+                except: 
+                    pass
+                # Recria a conexão limpa
+                exchange = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
+                
             await asyncio.sleep(5)
 
 # --- FASTAPI E ROTAS (Pylance Fix: Fora de funções) ---
