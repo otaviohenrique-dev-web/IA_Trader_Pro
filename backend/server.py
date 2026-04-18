@@ -689,15 +689,36 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Configure CORS ANTES de qualquer rota
+# ✅ Adicionar middleware de CORS PERMISSIVO antes do middleware CORS
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+class PermissiveCORSMiddleware(BaseHTTPMiddleware):
+    """Middleware CORS permissivo que funciona com WebSocket."""
+    async def dispatch(self, request, call_next):
+        # Permitir OPTIONS (preflight) para WebSocket
+        if request.method == "OPTIONS":
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "3600",
+                }
+            )
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+
+# Adicionar o middleware ANTES dos outros middlewares
+app.add_middleware(PermissiveCORSMiddleware)
+
+# Configure CORS ANTES de qualquer rota - PERMISSIVO para WebSocket e API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://iatraderproweb.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:8000"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # ⚠️ Permite todas as origens (necessário para WebSocket funcionar em produção)
+    allow_credentials=False,  # WebSocket não suporta credentials com allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
@@ -806,6 +827,7 @@ async def websocket_endpoint(websocket: WebSocket):
     client_id = None
     try:
         print(f">>> [WS] Nova conexão: {websocket.client}")
+        print(f">>> [WS] Headers: {dict(websocket.headers)}")  # Debug: mostrar headers
         
         # LOGGING: Verificar estado da aplicação antes de aceitar
         if state is None:
@@ -819,8 +841,11 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f">>> [WS] Aceitando conexão...")
         try:
             await websocket.accept()
+            print(f">>> [WS] ✅ WebSocket aceito com SUCESSO para {websocket.client}")
         except Exception as accept_err:
             print(f">>> [WS] ❌ ERRO ao aceitar: {type(accept_err).__name__}: {accept_err}")
+            import traceback
+            traceback.print_exc()
             return
         
         client_id = str(websocket.client) if websocket.client else "unknown"
