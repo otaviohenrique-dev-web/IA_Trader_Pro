@@ -32,15 +32,17 @@ TAKE_PROFIT_PCT = +0.020
 # 1. Tenta carregar o arquivo .env que está na mesma pasta (backend/.env)
 load_dotenv()
 
-# 2. Puxa as variáveis
-CRYPTOPANIC_KEY = os.environ.get("CRYPTOPANIC_API_KEY")
+# 2. Puxa as variáveis (CryptoCompare: notícias BTC; Gemini: Sentinela)
+CRYPTOCOMPARE_KEY = os.environ.get("CRYPTOCOMPARE_API_KEY") or os.environ.get("CRYPTOCOMPARE_KEY") or ""
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 ADMIN_PASS = os.environ.get("ADMIN_PASSWORD")
 
-# 3. Trava de Segurança: Avisa no terminal se as chaves falharam
-if not GEMINI_KEY or not CRYPTOPANIC_KEY:
-    print(">>> ⚠️ ALERTA CRÍTICO: Chaves de API não encontradas no ambiente ou no .env!")
-    print(">>> O sistema pode falhar ao acessar o Sentinela.")
+# 3. Avisos de configuração
+if not GEMINI_KEY:
+    print(">>> ⚠️ ALERTA CRÍTICO: GEMINI_API_KEY não encontrada no ambiente ou no .env!")
+    print(">>> O Sentinela (análise de risco por LLM) pode falhar.")
+if not CRYPTOCOMPARE_KEY:
+    print(">>> ⚠️ AVISO: CRYPTOCOMPARE_API_KEY não encontrada. Cota de notícias pode ser menor.")
 
 
 # --- VARIÁVEIS GLOBAIS DE ESTADO ---
@@ -63,6 +65,17 @@ consecutive_signals = 0
 last_signal = 0   
 last_entry_ts = 0
 
+
+def rotulo_risco_analista(codigo: str) -> str:
+    """Rótulos em português para o painel (códigos internos seguem inglês por compatibilidade com o Gemini)."""
+    return {
+        "SAFE": "seguro",
+        "CAUTION": "atenção",
+        "DANGER": "perigo",
+        "MODO TÉCNICO": "modo técnico",
+    }.get(codigo, codigo)
+
+
 state = {
     "asset": SYMBOL,
     "is_online": True,
@@ -70,7 +83,7 @@ state = {
     "entry_price": 0.0,
     "current_position": 0,
     "balance": balance, 
-    "status": "REBOOT DO SISTEMA...",
+    "status": "Reiniciando o sistema...",
     "uptime": "00:00:00",
     "last_candle": {},
     "chart_data": [],
@@ -98,7 +111,7 @@ lstm_states = None
 episode_starts = np.ones((1,), dtype=bool)
 feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct']
 last_analysis_time = 0
-cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural..."}
+cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
 
 # --- FUNÇÕES DE SUPORTE ---
 
@@ -151,32 +164,37 @@ client = genai.Client(api_key=GEMINI_KEY)
 
 
 # --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
+_NEWS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+
+async def _cryptocompare_news_titles(session, query: str, headers: dict) -> list:
+    """query = parte após '?' (ex.: categories=BTC&lang=PT). Retorna lista de títulos, [] ou ['API_ESGOTADA']."""
+    key_q = f"&api_key={CRYPTOCOMPARE_KEY}" if CRYPTOCOMPARE_KEY else ""
+    url = f"https://min-api.cryptocompare.com/data/v2/news/?{query}{key_q}"
+    async with session.get(url, headers=headers, timeout=15) as resp:
+        if resp.status == 200:
+            data = await resp.json()
+            results = data.get("Data", [])
+            if results:
+                return [f" {p['title']} •" for p in results[:10]]
+            return []
+        if resp.status == 429:
+            return ["API_ESGOTADA"]
+        print(f">>> ❌ Erro na API CryptoCompare (Status {resp.status}).")
+        return []
+
+
 async def fetch_btc_news():
-    # 🟢 URL da CryptoCompare filtrada por BTC e em Inglês (Melhor para o Gemini)
-    api_url = f"https://min-api.cryptocompare.com/data/v2/news/?categories=BTC&lang=EN&api_key={CRYPTOCOMPARE_KEY}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    
+    """Manchetes BTC: prioriza português (lang=PT); se vazio, tenta inglês."""
+    headers = {"User-Agent": _NEWS_UA}
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, headers=headers, timeout=15) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    # A CryptoCompare guarda as notícias dentro do array 'Data'
-                    results = data.get('Data', [])
-                    
-                    if results:
-                        # Extrai os títulos para o letreiro
-                        news_list = [f" {p['title']} •" for p in results[:10]]
-                        return news_list
-                    return []
-                elif resp.status == 429:
-                    return ["API_ESGOTADA"]
-                else:
-                    print(f">>> ❌ Erro na API CryptoCompare (Status {resp.status}).")
-                    return []
+            titles = await _cryptocompare_news_titles(session, "categories=BTC&lang=PT", headers)
+            if titles and titles[0] == "API_ESGOTADA":
+                return titles
+            if not titles:
+                titles = await _cryptocompare_news_titles(session, "categories=BTC&lang=EN", headers)
+            return titles
     except Exception as e:
         print(f">>> ❌ Falha na conexão de notícias: {e}")
         return []
@@ -186,75 +204,24 @@ async def fetch_btc_news():
 async def analyst_market_loop():
     print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
     
-    global kill_switch_active
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
-    
-    while True:
-        try:
-            headlines = await fetch_btc_news()
-            
-            # --- CIRCUITO DE PROTEÇÃO CONTRA COTA ESGOTADA ---
-            if headlines and headlines[0] == "API_ESGOTADA":
-                print(">>> ⚠️ API de Notícias Esgotada. Entrando em MODO 100% TÉCNICO.")
-                state["news_agent"].update({
-                    "status": "SAFE",
-                    "sentiment_score": 0.0,
-                    "risk_level": "MODO TÉCNICO",
-                    "last_headlines": ["⚠️ ALERTA: API DE NOTÍCIAS ESGOTADA - TRABALHANDO 100% VIA GRÁFICOS (TA) •"]
-                })
-                kill_switch_active = False
-                await asyncio.sleep(3600) 
-                continue
-                
-            # Resto da lógica normal (Fallback para notícias gerais)
-            if not headlines:
-                # 🟢 URL Geral da CryptoCompare (Sem filtro de moeda)
-                general_url = f"https://min-api.cryptocompare.com/data/v2/news/?lang=EN&api_key={CRYPTOCOMPARE_KEY}"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(general_url, headers=headers, timeout=15) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            headlines = [f" {p['title']} •" for p in data.get('Data', [])[:10]]
-
-            analysis = await analyze_sentiment_with_llm(headlines)
-            
-            state["news_agent"].update({
-                "status": analysis["status"],
-                "sentiment_score": analysis["score"],
-                "risk_level": analysis["status"],
-                "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
-            })
-            
-            if analysis["status"] == "SAFE":
-                kill_switch_active = False
-            
-            print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
-            await asyncio.sleep(600) 
-            
-        except Exception as e:
-            print(f"❌ Erro no Analista: {e}")
-            await asyncio.sleep(60)
-
-# (Mantenha a função analyze_sentiment_with_llm intacta aqui no meio)
-
-async def analyst_market_loop():
-    print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
-    
     # DECLARAÇÃO GLOBAL AQUI NO TOPO (Evita o SyntaxError)
     global kill_switch_active
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
+    headers = {"User-Agent": _NEWS_UA}
     
     while True:
         try:
             headlines = await fetch_btc_news()
-            
-            # --- CIRCUITO DE PROTEÇÃO CONTRA COTA ESGOTADA ---
+
+            # Fallback: feed geral CryptoCompare (PT, depois EN se vazio)
+            if not headlines:
+                async with aiohttp.ClientSession() as session:
+                    for q in ("lang=PT", "lang=EN"):
+                        headlines = await _cryptocompare_news_titles(session, q, headers)
+                        if headlines:
+                            break
+
+            # --- CIRCUITO DE PROTEÇÃO CONTRA COTA ESGOTADA (após BTC + fallback) ---
             if headlines and headlines[0] == "API_ESGOTADA":
                 print(">>> ⚠️ API de Notícias Esgotada. Entrando em MODO 100% TÉCNICO.")
                 state["news_agent"].update({
@@ -263,19 +230,9 @@ async def analyst_market_loop():
                     "risk_level": "MODO TÉCNICO",
                     "last_headlines": ["⚠️ ALERTA: API DE NOTÍCIAS ESGOTADA - TRABALHANDO 100% VIA GRÁFICOS (TA) •"]
                 })
-                # Já declaramos lá em cima, agora é só usar
                 kill_switch_active = False
-                await asyncio.sleep(3600) # Dorme por 1 hora
+                await asyncio.sleep(3600)
                 continue
-                
-            # Resto da lógica normal
-            if not headlines:
-                general_url = f"https://cryptopanic.com/api/developer/v2/posts/?auth_token={CRYPTOPANIC_KEY}&regions=en,pt"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(general_url, headers=headers, timeout=15) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            headlines = [f" {p['title']} •" for p in data.get('results', [])[:10]]
 
             analysis = await analyze_sentiment_with_llm(headlines)
             
@@ -313,7 +270,7 @@ async def analyze_sentiment_with_llm(headlines):
     
     # 🧠 PROMPT CALIBRADO: Ensinando a IA a ser um trader frio, não um jornalista assustado
     prompt = f"""
-    Você é um Gestor de Risco Quantitativo sênior de Bitcoin. Avalie o risco macroeconômico atual baseado nestas manchetes:
+    Você é um Gestor de Risco Quantitativo sênior de Bitcoin. Avalie o risco macroeconômico atual baseado nestas manchetes (em português ou inglês):
     {headlines}
 
     REGULAGEM DE RISCO ESTREITA (O mercado cripto é naturalmente volátil, ignore o sensacionalismo):
@@ -423,7 +380,7 @@ async def sniper_loop():
 
                 # Estados Iniciais
                 if startup_phase:
-                    state["status"] = "REBOOT: EXECUTANDO BACKTEST..."
+                    state["status"] = "Reinício: executando backtest..."
                     startup_timer += 1
                     if startup_timer == 1:
                         res = run_startup_backtest(df_clean, model)
@@ -464,7 +421,7 @@ async def sniper_loop():
                     elif position == 0:
                         is_safe = state["news_agent"]["status"] == "SAFE"
                         if not is_safe:
-                            state["status"] = f"⏳ AGUARDANDO ANALISTA ({state['news_agent']['status']})"
+                            state["status"] = f"⏳ AGUARDANDO ANALISTA ({rotulo_risco_analista(state['news_agent']['status'])})"
                         elif consecutive_signals >= 3:
                             target_pos = 1 if act_idx == 1 else (-1 if act_idx == 2 else 0)
                         else:
@@ -484,11 +441,12 @@ async def sniper_loop():
                             "position": "aboveBar",
                             "color": "#facc15", 
                             "shape": "square",
-                            "text": f"EXIT: {'WIN' if pnl > 0 else 'LOSS'}"
+                            "text": f"SAÍDA: {'GANHO' if pnl > 0 else 'PERDA'}"
                         })
                         
-                        resultado_texto = "WIN ✅" if pnl > 0 else "LOSS ❌"
-                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🏁 FECHOU {'LONG' if position==1 else 'SHORT'} | PnL: ${pnl:.2f} ({resultado_texto})"})
+                        resultado_texto = "ganho ✅" if pnl > 0 else "perda ❌"
+                        lado = "compra (long)" if position == 1 else "venda (short)"
+                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🏁 Fechou {lado} | PnL: US$ {pnl:.2f} ({resultado_texto})"})
                         
                         if len(state["order_book"]) > 50: state["order_book"].pop()
                         
@@ -511,9 +469,10 @@ async def sniper_loop():
                             "position": "belowBar" if position == 1 else "aboveBar",
                             "color": "#22c55e" if position == 1 else "#ef4444",
                             "shape": "circle",
-                            "text": f"ENTRY {'LONG' if position==1 else 'SHORT'}"
+                            "text": f"ENTRADA {'COMPRA' if position==1 else 'VENDA'}"
                         })
-                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 ABRIU {'LONG' if position==1 else 'SHORT'} em ${current_price:.2f}"})
+                        lado_abertura = "compra (long)" if position == 1 else "venda (short)"
+                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Abriu {lado_abertura} a US$ {current_price:.2f}"})
 
                 # Sincronização Final do Estado
                 state.update({
@@ -565,6 +524,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+@app.get("/api/state")
+async def get_state_snapshot():
+    """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
+    return state
 
 @app.get("/api/historico")
 async def get_historico():

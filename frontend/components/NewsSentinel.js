@@ -10,9 +10,21 @@ export default function NewsSentinel({ data }) {
     SAFE: { color: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10', icon: <ShieldCheck size={18}/> },
     CAUTION: { color: 'text-yellow-400', border: 'border-yellow-500/30', bg: 'bg-yellow-500/10', icon: <ShieldAlert size={18}/> },
     DANGER: { color: 'text-red-400', border: 'border-red-500/30', bg: 'bg-red-500/10', icon: <ShieldX size={18}/> },
+    'MODO TÉCNICO': { color: 'text-slate-300', border: 'border-slate-500/30', bg: 'bg-slate-500/10', icon: <ShieldCheck size={18}/> },
+    BAIXO: { color: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10', icon: <ShieldCheck size={18}/> },
+    'INICIALIZANDO...': { color: 'text-blue-400', border: 'border-blue-500/30', bg: 'bg-blue-500/10', icon: <Newspaper size={18}/> },
   };
 
-  const current = config[risk_level] || config.SAFE;
+  const rotuloStatus = {
+    SAFE: 'Seguro',
+    CAUTION: 'Atenção',
+    DANGER: 'Perigo',
+    'MODO TÉCNICO': 'Modo técnico',
+    BAIXO: 'Baixo',
+    'INICIALIZANDO...': 'Inicializando',
+  };
+
+  const current = config[risk_level] || config[status] || config.SAFE;
 
 // Garante que o score é um número válido e converte para %
   const score = data?.sentiment_score || 0;
@@ -41,14 +53,14 @@ export default function NewsSentinel({ data }) {
           <h3 className="font-bold text-white text-[11px] uppercase tracking-tighter italic">Analista do BTC</h3>
         </div>
         <div className={`px-2 py-0.5 rounded text-[9px] font-black border ${current.border} ${current.color} bg-black/40 font-mono`}>
-          {status}
+          {rotuloStatus[status] || status}
         </div>
       </div>
 
       <div className="mt-auto">
         <div className="flex justify-between items-end mb-1">
           <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-            Sentimento Macro
+            Sentimento macro
           </span>
           {/* O texto da porcentagem muda de cor junto com a barra */}
           <span className={`text-xl font-black font-mono ${textColorClass}`}>
@@ -75,7 +87,7 @@ export default function NewsSentinel({ data }) {
           {last_headlines && last_headlines.length > 0 ? (
             // Duplicamos a lista para o loop ser contínuo e sem pulos
             [...last_headlines, ...last_headlines].map((news, i) => (
-              <span key={i} className="text-[11px] font-mono text-orange-400/90 mx-6 uppercase flex items-center gap-2 tracking-wide">
+              <span key={i} className="text-[11px] font-mono text-orange-400/90 mx-6 flex items-center gap-2 tracking-wide">
                 <Radio size={10} className="text-orange-600 animate-pulse" /> {news}
               </span>
             ))

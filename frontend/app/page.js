@@ -2,8 +2,32 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts'; 
-import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database } from 'lucide-react';
+import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database, Github, Linkedin } from 'lucide-react';
 import NewsSentinel from '../components/NewsSentinel';
+
+/** HTTP base do FastAPI (ex.: http://127.0.0.1:10000). Opcional: NEXT_PUBLIC_API_URL */
+function backendHttpBase() {
+  const api = process.env.NEXT_PUBLIC_API_URL;
+  if (api) return api.replace(/\/$/, "");
+  const ws = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
+  return ws
+    .replace(/^wss:\/\//i, "https://")
+    .replace(/^ws:\/\//i, "http://")
+    .replace(/\/ws\/?$/i, "");
+}
+
+/** WebSocket do backend (termina em /ws). Opcional: NEXT_PUBLIC_WS_URL */
+function backendWsUrl() {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  const api = process.env.NEXT_PUBLIC_API_URL;
+  if (api) {
+    const u = api.replace(/\/$/, "");
+    const host = u.includes("://") ? u.split("://")[1] : u;
+    if (/^https:/i.test(u)) return `wss://${host}/ws`;
+    return `ws://${host}/ws`;
+  }
+  return "ws://127.0.0.1:10000/ws";
+}
 
 // ==========================================
 // 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
@@ -36,6 +60,58 @@ const calculateZigZag = (data, thresholdPct = 0.5) => {
   return pivots.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i).sort((a, b) => a.time - b.time);
 };
 
+/** Marcadores de entrada com preço Y exato (lightweight-charts v5). */
+function prepareChartMarkers(markers, candleByTime) {
+  if (!markers?.length) return [];
+  return markers.map((m) => {
+    if (m.shape !== "circle") return m;
+    const c = candleByTime.get(m.time);
+    const price = m.price != null ? Number(m.price) : (c?.close != null ? Number(c.close) : null);
+    if (price == null || Number.isNaN(price)) return m;
+    const size = Math.max(3, Number(m.size) || 3);
+    return { ...m, position: "atPriceMiddle", price, size };
+  });
+}
+
+/**
+ * Linha horizontal no preço de entrada: do candle de entrada até o de saída (ou até o candle ao vivo se aberto).
+ * Usa Whitespace entre segmentos para não ligar trades diferentes.
+ */
+function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPriceState, candleMap) {
+  if (!markers?.length) return [];
+  const sorted = [...markers].sort((a, b) => a.time - b.time);
+  const circles = sorted.filter((m) => m.shape === "circle");
+  if (circles.length === 0) return [];
+
+  const segments = [];
+  for (const ent of circles) {
+    let px = ent.price != null ? Number(ent.price) : null;
+    if (px == null || Number.isNaN(px)) {
+      const c = candleMap.get(ent.time);
+      if (c?.close != null) px = Number(c.close);
+    }
+    if (px == null || Number.isNaN(px)) continue;
+
+    const exit = sorted.find((m) => m.shape === "square" && m.time > ent.time);
+    if (exit) {
+      segments.push({ t0: ent.time, t1: exit.time, price: px });
+    } else {
+      let endT = liveCandle?.time != null ? Number(liveCandle.time) : ent.time;
+      if (inPosition && entryPriceState > 0) px = Number(entryPriceState);
+      if (endT <= ent.time) endT = ent.time + 900;
+      segments.push({ t0: ent.time, t1: endT, price: px });
+    }
+  }
+
+  const out = [];
+  segments.forEach((s, i) => {
+    if (i > 0) out.push({ time: segments[i - 1].t1 });
+    out.push({ time: s.t0, value: s.price });
+    out.push({ time: s.t1, value: s.price });
+  });
+  return out;
+}
+
 // ==========================================
 // 🧬 COMPONENTE: DOJO (PROTOCOLO APOCALIPSE)
 // ==========================================
@@ -45,8 +121,7 @@ function DojoPanel({ state }) {
   const [loading, setLoading] = useState(false);
   const [mensagem, setMensagem] = useState('');
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
-  const API_URL = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').replace('/ws', '');
+  const API_URL = backendHttpBase();
 
   const handleDownload = async () => {
     if (!senha) { setMensagem('⚠️ Digite a senha Admin.'); return; }
@@ -141,15 +216,13 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
   const seriesInstance = useRef(null);
   const zigzagSeriesRef = useRef(null);
   const exactTradeLineRef = useRef(null);
-  
-  // 🟢 NOVO: Referência para a Linha de Preço Fixa
-  const priceLineRef = useRef(null); 
-  
+  const entryHorizontalSeriesRef = useRef(null);
+
   const isDataLoaded = useRef(false);
   const markersRef = useRef([]);
   const chartDataMap = useRef(new Map());
-  const currentHoverState = useRef("none"); 
-  const lastMarkersCount = useRef(0);
+  const currentHoverState = useRef("none");
+  const markersSigRef = useRef("");
 
   useEffect(() => {
     if (markersData) markersRef.current = markersData;
@@ -182,14 +255,23 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
       color: '#a855f7', lineWidth: 2, lineStyle: 3, crosshairMarkerVisible: true, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null 
     });
 
+    const entryHorizontal = chart.addSeries(LineSeries, {
+      color: "#fbbf24",
+      lineWidth: 2,
+      lineStyle: 2,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
     chartInstance.current = chart;
     seriesInstance.current = newSeries;
     zigzagSeriesRef.current = zigzagSeries;
     exactTradeLineRef.current = exactTradeLine;
+    entryHorizontalSeriesRef.current = entryHorizontal;
 
     const carregarHistorico = async () => {
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
-      const API_URL = wsUrl.replace('wss://', 'https://').replace('ws://', 'http://').replace('/ws', '');
+      const API_URL = backendHttpBase();
       
       try {
         const res = await fetch(`${API_URL}/api/historico`);
@@ -209,6 +291,24 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
             zigzagSeries.setData(calculateZigZag(dimmedData, 0.8));
             chart.timeScale().fitContent();
             isDataLoaded.current = true;
+            markersSigRef.current = "";
+            if (markersRef.current.length > 0 && typeof newSeries.setMarkers === "function") {
+              const sorted = [...markersRef.current].sort((a, b) => a.time - b.time);
+              newSeries.setMarkers(prepareChartMarkers(sorted, chartDataMap.current));
+              markersSigRef.current = JSON.stringify(sorted);
+            }
+            if (entryHorizontalSeriesRef.current) {
+              const hData = buildEntryHorizontalLineData(
+                markersRef.current,
+                null,
+                false,
+                0,
+                chartDataMap.current
+              );
+              try {
+                entryHorizontalSeriesRef.current.setData(hData);
+              } catch (_) { /* noop */ }
+            }
           }
         }
       } catch (err) { console.error("Erro API:", err); }
@@ -237,8 +337,8 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
           tooltip.style.top = param.point.y + 15 + 'px';
           
           const isEntry = hoveredMarker.shape === 'circle';
-          const direction = hoveredMarker.text.includes('LONG') ? '⬆️ LONG' : '⬇️ SHORT';
-          const result = hoveredMarker.text === 'WIN' ? '✅ WIN' : (hoveredMarker.text === 'LOSS' ? '❌ LOSS' : '');
+          const direction = hoveredMarker.text.includes('COMPRA') ? '⬆️ Compra (long)' : '⬇️ Venda (short)';
+          const result = hoveredMarker.text.includes('GANHO') ? '✅ Ganho' : (hoveredMarker.text.includes('PERDA') ? '❌ Perda' : '');
           const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
           const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
 
@@ -247,7 +347,7 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
               ${isEntry ? 'ESTADO IA: ENTRADA' : 'ESTADO IA: SAÍDA'}
             </div>
             <div class="text-xs text-white mb-1">Ação: ${isEntry ? direction : result}</div>
-            <div class="text-xs text-slate-300">Preço: $${candleData.close.toFixed(2)}</div>
+            <div class="text-xs text-slate-300">${isEntry ? "Preço de entrada" : "Preço (fechamento)"}: US$ ${(hoveredMarker.price != null ? Number(hoveredMarker.price) : candleData.close).toFixed(2)}</div>
             <div class="mt-2 pt-2 border-t border-slate-600 text-[10px] text-slate-400 font-mono">
               RSI: ${rsiText}<br/>BB Largura: ${bbText}
             </div>
@@ -259,13 +359,13 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
               const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
               if (exitMarker && exitMarker.time !== param.time) {
                 const exitCandle = chartDataMap.current.get(exitMarker.time);
-                exactTradeLine.setData([{ time: param.time, value: candleData.close }, { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }]);
+                exactTradeLine.setData([{ time: param.time, value: hoveredMarker.price != null ? Number(hoveredMarker.price) : candleData.close }, { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }]);
               }
             } else {
               const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
               if (entryMarker && entryMarker.time !== param.time) {
                 const entryCandle = chartDataMap.current.get(entryMarker.time);
-                exactTradeLine.setData([{ time: entryMarker.time, value: entryCandle ? entryCandle.close : candleData.close }, { time: param.time, value: candleData.close }]);
+                exactTradeLine.setData([{ time: entryMarker.time, value: entryMarker.price != null ? Number(entryMarker.price) : (entryCandle ? entryCandle.close : candleData.close) }, { time: param.time, value: candleData.close }]);
               }
             }
           }
@@ -288,6 +388,7 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
       resizeObserver.disconnect();
       chart.remove();
       chartInstance.current = null;
+      entryHorizontalSeriesRef.current = null;
     };
   }, []); 
 
@@ -302,46 +403,36 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
   }, [liveCandle]);
 
   useEffect(() => {
-    if (isDataLoaded.current && seriesInstance.current && markersData?.length > 0) {
-      if (markersData.length !== lastMarkersCount.current) {
-        lastMarkersCount.current = markersData.length;
-        try {
-          if (typeof seriesInstance.current.setMarkers === 'function') {
-            const sortedMarkers = [...markersData].sort((a, b) => a.time - b.time);
-            seriesInstance.current.setMarkers(sortedMarkers);
-          }
-        } catch (e) { console.error("Erro ao aplicar marcadores:", e); }
+    if (!isDataLoaded.current || !seriesInstance.current || markersData == null) return;
+    const sorted = [...markersData].sort((a, b) => a.time - b.time);
+    const sig = JSON.stringify(sorted);
+    if (sig === markersSigRef.current) return;
+    markersSigRef.current = sig;
+    try {
+      if (typeof seriesInstance.current.setMarkers === "function") {
+        seriesInstance.current.setMarkers(prepareChartMarkers(sorted, chartDataMap.current));
       }
+    } catch (e) {
+      console.error("Erro ao aplicar marcadores:", e);
     }
   }, [markersData]);
 
-  // 🟢 NOVO: O Efeito que controla a Linha de Preço Dinâmica
+  /** Linha horizontal âmbar: preço de entrada do candle de entrada até saída ou candle atual. */
   useEffect(() => {
-    if (!seriesInstance.current || !isDataLoaded.current) return;
-
-    if (inPosition && entryPrice > 0) {
-      // Cria a linha se o bot entrou em uma posição e a linha ainda não existe
-      if (!priceLineRef.current) {
-        const lineColor = currentPosition === 1 ? '#22c55e' : '#ef4444'; // Verde se LONG, Vermelho se SHORT
-        const lineTitle = currentPosition === 1 ? 'LONG' : 'SHORT';
-
-        priceLineRef.current = seriesInstance.current.createPriceLine({
-          price: entryPrice,
-          color: lineColor,
-          lineWidth: 2,
-          lineStyle: 2, // 2 = Dashed (Pontilhada)
-          axisLabelVisible: true,
-          title: `ENTRY ${lineTitle}`,
-        });
-      }
-    } else {
-      // Remove a linha do gráfico quando a posição for fechada
-      if (priceLineRef.current) {
-        seriesInstance.current.removePriceLine(priceLineRef.current);
-        priceLineRef.current = null;
-      }
+    if (!isDataLoaded.current || !entryHorizontalSeriesRef.current || markersData == null) return;
+    const lineData = buildEntryHorizontalLineData(
+      markersData,
+      liveCandle,
+      inPosition,
+      entryPrice,
+      chartDataMap.current
+    );
+    try {
+      entryHorizontalSeriesRef.current.setData(lineData);
+    } catch (e) {
+      console.error("Erro linha entrada:", e);
     }
-  }, [inPosition, entryPrice, currentPosition]);
+  }, [markersData, liveCandle, inPosition, entryPrice, currentPosition]);
 
   return (
     <div className="w-full relative rounded overflow-hidden" style={{ minHeight: '450px' }}>
@@ -360,19 +451,75 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 // ==========================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [hydrated, setHydrated] = useState(false);
+  const [wsLive, setWsLive] = useState(false);
   const ws = useRef(null);
+  const reconnectRef = useRef(null);
 
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
-    ws.current = new WebSocket(socketUrl);
-    ws.current.onmessage = (event) => setData(JSON.parse(event.data));
-    return () => { if (ws.current) ws.current.close(); };
+    const httpBase = backendHttpBase();
+    const socketUrl = backendWsUrl();
+    let cancelled = false;
+
+    const pullState = async () => {
+      try {
+        const res = await fetch(`${httpBase}/api/state`);
+        if (res.ok && !cancelled) setData(await res.json());
+      } catch (_) { /* backend off */ }
+    };
+
+    pullState().finally(() => { if (!cancelled) setHydrated(true); });
+
+    const connect = () => {
+      if (cancelled) return;
+      try { ws.current?.close(); } catch (_) { /* noop */ }
+      const s = new WebSocket(socketUrl);
+      ws.current = s;
+      s.onopen = () => { if (!cancelled) setWsLive(true); };
+      s.onmessage = (event) => {
+        if (cancelled) return;
+        setWsLive(true);
+        try { setData(JSON.parse(event.data)); } catch (_) { /* noop */ }
+      };
+      s.onerror = () => { if (!cancelled) setWsLive(false); };
+      s.onclose = () => {
+        if (cancelled) return;
+        setWsLive(false);
+        pullState();
+        reconnectRef.current = setTimeout(connect, 3000);
+      };
+    };
+    connect();
+
+    const poll = setInterval(() => {
+      if (cancelled || ws.current?.readyState === WebSocket.OPEN) return;
+      pullState();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      try { ws.current?.close(); } catch (_) { /* noop */ }
+    };
   }, []);
 
-  if (!data) return (
+  if (!data && !hydrated) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
       <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
-      <p className="animate-pulse">SINCROZINANDO COM O NÚCLEO...</p>
+      <p className="animate-pulse">Sincronizando com o núcleo...</p>
+    </div>
+  );
+
+  if (!data) return (
+    <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono px-6 text-center max-w-lg">
+      <ShieldAlert className="mb-4 text-amber-500" size={48} />
+      <p className="text-lg font-bold text-white mb-2">Servidor não respondeu</p>
+      <p className="text-sm text-slate-400 mb-4">
+        O painel precisa da API Python. Configure no Render (ou no <code className="text-cyan-400">.env.local</code>) as variáveis <code className="text-cyan-400">NEXT_PUBLIC_WS_URL</code> e/ou <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> apontando para o mesmo serviço do backend.
+      </p>
+      <p className="text-xs text-slate-500 font-mono break-all">Endereço tentado: {backendHttpBase()}</p>
+      <p className="text-xs text-slate-500 mt-2">Em desenvolvimento, na pasta <code className="text-slate-300">backend</code>, execute <code className="text-slate-300">python server.py</code> (porta padrão 10000).</p>
     </div>
   );
 
@@ -385,8 +532,15 @@ export default function Dashboard() {
           <Activity className="text-blue-500" /> IA TRADER PRO 
           <span className="text-[10px] not-italic bg-blue-500/10 border border-blue-500/30 px-2 py-1 rounded text-blue-400">V3.0.1</span>
         </h1>
-        <div className="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 font-mono text-xs flex items-center gap-2">
-          <Clock size={14} className="text-blue-400"/> UPTIME: {data.uptime}
+        <div className="flex flex-col items-end gap-1">
+          {!wsLive && (
+            <span className="text-[10px] font-mono text-amber-400 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded">
+              WebSocket offline — atualização por HTTP
+            </span>
+          )}
+          <div className="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 font-mono text-xs flex items-center gap-2">
+            <Clock size={14} className="text-blue-400"/> Tempo ativo: {data.uptime}
+          </div>
         </div>
       </header>
 
@@ -439,8 +593,8 @@ export default function Dashboard() {
             {data.status.includes("PROTEÇÃO") && (
               <div className="mt-3 w-full">
                 <div className="flex justify-between text-xs font-mono text-blue-400 mb-1.5">
-                  <span>{remainingSeconds}s restantes</span>
-                  <span>900s</span>
+                  <span>{remainingSeconds} s restantes</span>
+                  <span>900 s</span>
                 </div>
                 <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
                    <div className="h-full bg-blue-500 transition-all duration-1000 ease-linear" style={{ width: `${(remainingSeconds / 900) * 100}%` }} />
@@ -463,7 +617,7 @@ export default function Dashboard() {
               GEN {data.adaptation.generation}
             </div>
             <div className="text-sm lg:text-base text-green-400 font-mono mt-1 font-bold">
-              WR: {data.adaptation.current_win_rate}%
+              Acertos: {data.adaptation.current_win_rate}%
             </div>
           </div>
         </div>
@@ -505,6 +659,34 @@ export default function Dashboard() {
       </div>
 
       <DojoPanel state={data} />
+
+      <footer className="mt-12 pt-8 border-t border-slate-700/60 flex flex-col md:flex-row items-center justify-between gap-6 text-slate-500 text-sm">
+        <p className="text-center md:text-left leading-relaxed">
+          © {new Date().getFullYear()}{' '}
+          <span className="text-slate-400">Otávio Henrique Filgueiras dos Santos</span>
+          <span className="block text-xs text-slate-600 mt-1">IA Trader Pro — monitoramento e simulação. Uso por sua conta e risco.</span>
+        </p>
+        <nav className="flex items-center gap-5" aria-label="Redes sociais">
+          <a
+            href="https://www.linkedin.com/in/otaviohenrique-dev/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-slate-400 hover:text-[#0A66C2] transition-colors"
+          >
+            <Linkedin size={20} aria-hidden />
+            <span className="text-xs font-semibold tracking-wide">LinkedIn</span>
+          </a>
+          <a
+            href="https://github.com/otaviohenrique-dev-web"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors"
+          >
+            <Github size={20} aria-hidden />
+            <span className="text-xs font-semibold tracking-wide">GitHub</span>
+          </a>
+        </nav>
+      </footer>
     </div>
   );
 }
