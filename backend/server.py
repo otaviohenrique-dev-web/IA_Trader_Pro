@@ -546,6 +546,7 @@ async def sniper_loop():
                             "shape": "square",
                             "text": f"SAÍDA: {'GANHO' if pnl > 0 else 'PERDA'}"
                         })
+                        if len(state["markers"]) > 100: state["markers"].pop(0)
                         
                         resultado_texto = "ganho ✅" if pnl > 0 else "perda ❌"
                         lado = "compra (long)" if position == 1 else "venda (short)"
@@ -574,8 +575,11 @@ async def sniper_loop():
                             "shape": "circle",
                             "text": f"ENTRADA {'COMPRA' if position==1 else 'VENDA'}"
                         })
+                        if len(state["markers"]) > 100: state["markers"].pop(0)
+                        
                         lado_abertura = "compra (long)" if position == 1 else "venda (short)"
                         state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Abriu {lado_abertura} a US$ {current_price:.2f}"})
+                        if len(state["order_book"]) > 50: state["order_book"].pop()
 
                 # Sincronização Final do Estado
                 state.update({
@@ -688,46 +692,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# ✅ Middleware CORS Permissivo (Único - sem conflitos)
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+# ✅ Middleware CORS Padrão (Sem conflitos com WebSockets)
+from fastapi.middleware.cors import CORSMiddleware
 
-class PermissiveCORSMiddleware(BaseHTTPMiddleware):
-    """Middleware CORS permissivo que funciona PERFEITAMENTE com WebSocket."""
-    async def dispatch(self, request, call_next):
-        # Respond to preflight requests immediately (WEBSOCKET HANDSHAKE)
-        if request.method == "OPTIONS":
-            return Response(
-                status_code=200,
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Origin",
-                    "Access-Control-Max-Age": "86400",
-                    "Access-Control-Allow-Credentials": "false",
-                }
-            )
-        
-        # Process normal requests and add CORS headers
-        try:
-            response = await call_next(request)
-        except Exception as e:
-            print(f">>> ⚠️ ERRO no middleware antes de call_next: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            # Retorna erro 500 com CORS headers
-            response = Response(status_code=500, content="Internal Server Error")
-        
-        # ADD CORS HEADERS TO RESPONSE
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Origin"
-        response.headers["Access-Control-Expose-Headers"] = "*"
-        
-        return response
-
-# ✅ ADICIONAR MIDDLEWARE (APENAS ESTE - SEM O CORSMiddleware PADRÃO)
-app.add_middleware(PermissiveCORSMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
 
 @app.get("/api/state")
 async def get_state_snapshot():
