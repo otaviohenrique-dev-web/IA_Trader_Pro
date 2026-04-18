@@ -523,12 +523,32 @@ async def lifespan(app: FastAPI):
     if exchange: await exchange.close()
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# Configure CORS ANTES de qualquer rota
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://iatraderproweb.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "*"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
 
 @app.get("/api/state")
 async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
-    return state
+    try:
+        # Serialização segura para evitar erros com tipos não-JSON
+        safe_state = json.loads(json.dumps(state, default=str))
+        return safe_state
+    except Exception as e:
+        print(f">>> ❌ Erro ao retornar state: {e}")
+        return {"error": str(e), "status": "offline"}
 
 @app.get("/api/historico")
 async def get_historico():
@@ -546,16 +566,46 @@ async def get_historico():
         raise HTTPException(status_code=500, detail="Erro ao buscar histórico de velas.")
 
 @app.get("/health")
-async def health(): return {"status": "online"}
+async def health():
+    """Verificação de saúde básica do servidor."""
+    return {
+        "status": "online",
+        "timestamp": datetime.now().isoformat(),
+        "uptime": get_uptime()
+    }
+
+@app.get("/api/health")
+async def api_health():
+    """Endpoint CORS-friendly para verificar saúde."""
+    return {
+        "status": "ok",
+        "backend": "online",
+        "timestamp": datetime.now().isoformat(),
+        "cors": "enabled"
+    }
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
     try:
+        await websocket.accept()
+        print(">>> 🟢 WebSocket conectado")
         while True:
-            await websocket.send_json(state)
-            await asyncio.sleep(1)
-    except: pass
+            try:
+                # Cria uma cópia segura do state para serialização
+                safe_state = json.loads(json.dumps(state, default=str))
+                await websocket.send_json(safe_state)
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f">>> ❌ Erro ao enviar no WebSocket: {type(e).__name__}: {e}")
+                break
+    except Exception as e:
+        print(f">>> ❌ Erro ao aceitar WebSocket: {type(e).__name__}: {e}")
+        try:
+            await websocket.close(code=1000, reason=f"Erro: {str(e)}")
+        except:
+            pass
 
 # ==========================================
 # 🧬 ROTAS DO DOJO (PROTOCOLO APOCALIPSE)
