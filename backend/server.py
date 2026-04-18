@@ -17,6 +17,7 @@ import warnings
 import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File, Header
+from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
 
 # --- CONFIGURAÇÕES DO SISTEMA ---
@@ -232,12 +233,14 @@ async def fetch_btc_news():
 # (A função analyze_sentiment_with_llm CONTINUA INTACTA AQUI NO MEIO)
 
 async def analyst_market_loop():
-    print(">>> 🕵️ IA_Analista_BTC_Market: Escudo ativado!")
+    print(">>> 🕵️ IA_ANALISTA: Iniciando Sentinela de Mercado...")
     
     # DECLARAÇÃO GLOBAL AQUI NO TOPO (Evita o SyntaxError)
     global kill_switch_active
     
     headers = {"User-Agent": _NEWS_UA}
+    
+    print(">>> ✅ IA_ANALISTA: Pronto para análise de notícias")
     
     while True:
         try:
@@ -351,10 +354,22 @@ async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
     global kill_switch_active, last_entry_ts, startup_phase, startup_timer, warming_up, warmup_counter, consecutive_signals, last_signal
 
-    exchange = ccxt.kraken({
-        'enableRateLimit': True,
-        'timeout': 30000
-    })
+    print(">>> 🐍 SNIPER_LOOP: Iniciando...")
+    
+    try:
+        exchange = ccxt.kraken({
+            'enableRateLimit': True,
+            'timeout': 30000
+        })
+        print(">>> ✅ SNIPER_LOOP: Conexão com Kraken OK")
+    except Exception as e:
+        print(f">>> ❌ SNIPER_LOOP: Erro ao conectar em Kraken: {type(e).__name__}: {e}")
+        await asyncio.sleep(5)
+        return  # Será retentado na próxima execução do lifespan
+
+    # Marca que state está pronto
+    state["status"] = "Sistema iniciando... (conectado à corretora)"
+    print(f">>> ✅ SNIPER_LOOP: State inicializado: {list(state.keys())}")
 
     last_saved_candle_ts = 0 
     last_fetch_ts = 0
@@ -635,31 +650,40 @@ async def lifespan(app: FastAPI):
     2. Todos os loops em background (não bloqueador)
     3. Modelo carrega em thread (zero efeito no startup)
     """
-    print(">>> 🚀 FastAPI iniciando...")
+    print(">>> 🚀 FastAPI iniciando lifespan...")
     
     # ✅ BACKGROUND TASKS - Não bloqueam
     try:
         # Inicia loops de trading em paralelo (fire-and-forget)
-        asyncio.create_task(sniper_loop())
-        asyncio.create_task(analyst_market_loop())
+        print(">>> 📍 Iniciando sniper_loop...")
+        task_sniper = asyncio.create_task(sniper_loop())
+        print(">>> ✅ Sniper task criado")
+        
+        print(">>> 📍 Iniciando analyst_market_loop...")
+        task_analyst = asyncio.create_task(analyst_market_loop())
+        print(">>> ✅ Analyst task criado")
         
         # Carrega modelo em thread (não bloqueia)
         if os.path.exists(MODEL_PATH):
+            print(f">>> 📍 Carregando modelo de {MODEL_PATH} em thread...")
             asyncio.create_task(asyncio.to_thread(load_brain, MODEL_PATH))
         else:
-            print(f"⚠️ Modelo não encontrado em {MODEL_PATH}")
+            print(f">>> ⚠️ Modelo não encontrado em {MODEL_PATH}")
         
-        print(">>> ✅ FastAPI PRONTA na porta!")
+        print(">>> ✅ FastAPI PRONTO na porta!")
         
     except Exception as e:
-        print(f"❌ Erro no startup: {type(e).__name__}: {e}")
+        print(f">>> ❌ Erro no startup: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         # NÃO FALHA - Continua mesmo com erro
     
     # ✅ YIELD IMEDIATAMENTE - Nunca bloqueia!
+    print(">>> 🟢 Sistema aguardando conexões...")
     yield
     
     # Cleanup (raramente executado em Render)
-    print(">>> 🛑 Encerrando...")
+    print(">>> 🛑 Encerrando lifespan...")
 
 
 
@@ -778,9 +802,30 @@ async def performance_metrics():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket com logging detalhado para diagnosticar problemas."""
+    client_id = None
     try:
-        await websocket.accept()
-        print(">>> 🟢 WebSocket conectado")
+        print(f">>> [WS] Nova conexão: {websocket.client}")
+        
+        # LOGGING: Verificar estado da aplicação antes de aceitar
+        if state is None:
+            print(f">>> [WS] ❌ ERRO CRÍTICO: State é None! Fechando conexão.")
+            try:
+                await websocket.close(code=1011, reason="State not initialized")
+            except Exception as close_err:
+                print(f">>> [WS] Erro ao fechar: {close_err}")
+            return
+        
+        print(f">>> [WS] Aceitando conexão...")
+        try:
+            await websocket.accept()
+        except Exception as accept_err:
+            print(f">>> [WS] ❌ ERRO ao aceitar: {type(accept_err).__name__}: {accept_err}")
+            return
+        
+        client_id = str(websocket.client) if websocket.client else "unknown"
+        print(f">>> [WS] ✅ Conexão aceita: {client_id}")
+        
         while True:
             try:
                 # Cria uma cópia segura do state para serialização
@@ -788,16 +833,33 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json(safe_state)
                 await asyncio.sleep(1)
             except asyncio.CancelledError:
+                print(f">>> [WS] {client_id} cancelado")
                 break
+            except RuntimeError as re:
+                # WebSocket já foi fechado pelo cliente
+                if "WebSocket" in str(re) and "disconnected" in str(re).lower():
+                    print(f">>> [WS] {client_id} desconectado pelo cliente")
+                    break
+                else:
+                    print(f">>> [WS] ❌ RuntimeError enviando para {client_id}: {re}")
+                    break
             except Exception as e:
-                print(f">>> ❌ Erro ao enviar no WebSocket: {type(e).__name__}: {e}")
+                # Qualquer outra exception (incluindo ConnectionClosedOK se existir)
+                error_name = type(e).__name__
+                if "closed" in error_name.lower() or "disconnect" in str(e).lower():
+                    print(f">>> [WS] {client_id} desconectado: {error_name}")
+                else:
+                    print(f">>> [WS] ❌ Erro enviando para {client_id}: {error_name}: {str(e)[:100]}")
                 break
     except Exception as e:
-        print(f">>> ❌ Erro ao aceitar WebSocket: {type(e).__name__}: {e}")
+        print(f">>> [WS] ❌ ERRO GERAL ao configurar WebSocket: {type(e).__name__}: {str(e)[:100]}")
+        import traceback
+        traceback.print_exc()
         try:
-            await websocket.close(code=1000, reason=f"Erro: {str(e)}")
-        except:
-            pass
+            if websocket.client_state != WebSocketState.DISCONNECTED:
+                await websocket.close(code=1011, reason=f"Server error")
+        except Exception as close_err:
+            print(f">>> [WS] Erro final ao fechar: {close_err}")
 
 # ==========================================
 # 🧬 ROTAS DO DOJO (PROTOCOLO APOCALIPSE)
