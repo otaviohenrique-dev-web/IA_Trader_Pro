@@ -1,8 +1,7 @@
-from fastapi.responses import FileResponse
-import shutil
 import asyncio
 import json
 import time
+import shutil
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -11,13 +10,20 @@ import ccxt.async_support as ccxt
 from contextlib import asynccontextmanager
 import os
 import gc
+import math
+import copy
+import torch
 from sb3_contrib import RecurrentPPO
 import warnings
 import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File, Header
+from fastapi.responses import FileResponse
 from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
+
+# Trava o PyTorch para não estrangular a CPU do Render
+torch.set_num_threads(1)
 
 # --- CONFIGURAÇÕES DO SISTEMA ---
 SYMBOL = 'BTC/USDT'
@@ -388,41 +394,49 @@ async def sniper_loop():
             if now_ts - last_fetch_ts > 15 or last_fetch_ts == 0:
                 try:
                     print(f">>> 📊 Buscando OHLCV (timeout: 10s)...")
-                    # ✅ TIMEOUT PROTETOR: máximo 10 segundos
                     ohlcv = await asyncio.wait_for(
                         exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=500),
                         timeout=10.0
                     )
                     print(f">>> ✅ OHLCV recebido ({len(ohlcv)} velas)")
                     
-                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    # ✅ OTIMIZAÇÃO MÁXIMA: Isolando o Pandas em uma Thread
+                    def process_indicators(ohlcv_data):
+                        df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                        df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+                        df['rsi'] = ta.rsi(df['close'], length=14)
+                        df['rsi_slope'] = df['rsi'].diff()
+                        
+                        macd = ta.macd(df['close'])
+                        if macd is not None and not macd.empty:
+                            macd_col = [c for c in macd.columns if c.startswith('MACDh') or c.startswith('MACDH')][0]
+                            df['macd_diff'] = macd[macd_col]
+                        else:
+                            df['macd_diff'] = 0.0
+                        
+                        bb = ta.bbands(df['close'], length=20, std=2)
+                        if bb is not None and not bb.empty:
+                            upper_col = [c for c in bb.columns if c.startswith('BBU')][0]
+                            lower_col = [c for c in bb.columns if c.startswith('BBL')][0]
+                            width_col = [c for c in bb.columns if c.startswith('BBB')][0]
+                            df['bb_pband'] = (df['close'] - bb[lower_col]) / (bb[upper_col] - bb[lower_col])
+                            df['bb_width'] = bb[width_col]
+                        else:
+                            df['bb_pband'], df['bb_width'] = 0.0, 0.0
+                        
+                        df['ema50'] = ta.ema(df['close'], length=50)
+                        df['ema200'] = ta.ema(df['close'], length=200)
+                        df['dist_ema50'] = (df['close'] - df['ema50']) / df['ema50']
+                        df['dist_ema200'] = (df['close'] - df['ema200']) / df['ema200']
+                        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+                        df['atr_pct'] = df['atr'] / df['close']
+                        
+                        return df, df.dropna().copy()
                     
-                    # ✅ OTIMIZAÇÃO: Cálculos vetorizados em paralelo
-                    df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
-                    df['rsi'] = ta.rsi(df['close'], length=14)
-                    df['rsi_slope'] = df['rsi'].diff()
+                    # 🚀 A MÁGICA: Executa a matemática pesada sem travar o FastAPI
+                    df, df_clean = await asyncio.to_thread(process_indicators, ohlcv)
                     
-                    # ✅ Cache intermediário para evitar recálculo
-                    macd = ta.macd(df['close'])
-                    macd_col = [c for c in macd.columns if c.startswith('MACDh') or c.startswith('MACDH')][0]
-                    df['macd_diff'] = macd[macd_col]
-                    
-                    bb = ta.bbands(df['close'], length=20, std=2)
-                    upper_col = [c for c in bb.columns if c.startswith('BBU')][0]
-                    lower_col = [c for c in bb.columns if c.startswith('BBL')][0]
-                    width_col = [c for c in bb.columns if c.startswith('BBB')][0]
-                    df['bb_pband'] = (df['close'] - bb[lower_col]) / (bb[upper_col] - bb[lower_col])
-                    df['bb_width'] = bb[width_col]
-                    
-                    df['ema50'] = ta.ema(df['close'], length=50)
-                    df['ema200'] = ta.ema(df['close'], length=200)
-                    df['dist_ema50'] = (df['close'] - df['ema50']) / df['ema50']
-                    df['dist_ema200'] = (df['close'] - df['ema200']) / df['ema200']
-                    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-                    df['atr_pct'] = df['atr'] / df['close']
-                    
-                    df_clean = df.dropna().copy()
                     last_fetch_ts = now_ts
                     print(f">>> ✅ Indicadores calculados ({len(df_clean)} velas limpas)")
                     
@@ -432,21 +446,10 @@ async def sniper_loop():
                     await asyncio.sleep(1)
                     continue
                 except Exception as e:
-                    print(f"❌ Erro ao buscar OHLCV: {type(e).__name__}: {e}")
+                    print(f"❌ Erro ao buscar OHLCV ou calcular indicadores: {type(e).__name__}: {e}")
                     state["status"] = "❌ Erro conexão API"
                     await asyncio.sleep(2)
                     continue
-                
-                # Log de salvamento de vela
-                closed_candle_ts = ohlcv[-2][0] if len(ohlcv) >= 2 else 0
-                if closed_candle_ts > last_saved_candle_ts:
-                    if not os.path.exists("data"): 
-                        os.makedirs("data")
-                    try:
-                        df.iloc[:-1].tail(1).to_csv(DATA_PATH, mode='a', header=not os.path.exists(DATA_PATH), index=False)
-                        last_saved_candle_ts = closed_candle_ts
-                    except Exception as e:
-                        print(f"⚠️ Erro ao salvar CSV: {e}")
 
 
             # 2. LÓGICA DE DECISÃO E PnL
@@ -621,6 +624,8 @@ async def sniper_loop():
                     )
                 })
             
+            gc.collect() # Limpeza forçada de memória
+
             # ✅ SLEEP ADAPTATIVO: garante no mínimo 1s total por loop
             sleep_time = max(1.0 - loop_duration, 0.1)
             await asyncio.sleep(sleep_time)
@@ -801,6 +806,23 @@ async def performance_metrics():
         }
     }
 
+def sanitize_state(obj):
+    """Limpa resquícios do Numpy, NaN e Infinity que quebram o JSON do WebSocket"""
+    if isinstance(obj, dict):
+        return {k: sanitize_state(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_state(v) for v in obj]
+    elif isinstance(obj, (np.integer, np.floating)):
+        val = float(obj)
+        if math.isnan(val) or math.isinf(val): return 0.0
+        return val
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj): return 0.0
+        return obj
+    elif isinstance(obj, np.ndarray):
+        return sanitize_state(obj.tolist())
+    return obj
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket com logging detalhado para diagnosticar problemas de handshake."""
@@ -846,9 +868,11 @@ async def websocket_endpoint(websocket: WebSocket):
         
         while True:
             try:
-                # Cria uma cópia segura do state para serialização JSON
-                safe_state = json.loads(json.dumps(state, default=str))
-                await websocket.send_json(safe_state)
+               # Cria cópia, higieniza tipos tóxicos e serializa com segurança
+                current_state = copy.deepcopy(state)
+                safe_state = sanitize_state(current_state)
+                safe_state_json = json.loads(json.dumps(safe_state, default=str))
+                await websocket.send_json(safe_state_json)
                 await asyncio.sleep(1)
                 
             except asyncio.CancelledError:
