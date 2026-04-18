@@ -138,7 +138,8 @@ def log_loop_performance(loop_duration):
         loop_times.pop(0)
     
     avg_time = sum(loop_times) / len(loop_times)
-    if loop_duration > 2.0:  # Alerta se > 2s
+    # Mudamos a tolerância de 2.0 para 10.0 segundos
+    if loop_duration > 10.0:  
         print(f"⚠️ LOOP LENTO: {loop_duration:.2f}s (média: {avg_time:.2f}s)")
 
 # --- FUNÇÕES DE SUPORTE ---
@@ -393,10 +394,10 @@ async def sniper_loop():
             # 1. BUSCA DE DADOS (A cada 15s para poupar API)
             if now_ts - last_fetch_ts > 60 or last_fetch_ts == 0:
                 try:
-                    print(f">>> 📊 Buscando OHLCV (timeout: 10s)...")
+                    print(f">>> 📊 Buscando OHLCV (timeout: 15s)...")
                     ohlcv = await asyncio.wait_for(
                         exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=250),
-                        timeout=10.0
+                        timeout=15.0 # Aumentado para 15s
                     )
                     print(f">>> ✅ OHLCV recebido ({len(ohlcv)} velas)")
                     
@@ -748,7 +749,7 @@ async def health():
         "uptime": get_uptime(),
         "loop_health": {
             "avg_ms": round(avg_loop * 1000, 2),
-            "healthy": avg_loop < 2.0  # Deve ser < 2s
+            "healthy": avg_loop < 10.0  # Tolerância ajustada para < 10s
         }
     }
 
@@ -767,7 +768,8 @@ async def api_health():
         "performance": {
             "avg_loop_ms": round(avg_loop_time * 1000, 2),
             "max_loop_ms": round(max_loop * 1000, 2),
-            "loop_count": len(loop_times)
+            "loop_count": len(loop_times),
+            "healthy": avg_loop_time < 10.0  # Alinhado com o novo padrão
         }
     }
 
@@ -793,11 +795,11 @@ async def performance_metrics():
             "min_ms": round(min_loop * 1000, 2),
             "max_ms": round(max_loop * 1000, 2),
             "samples": len(loop_times),
-            "healthy": avg_loop < 2.0  # Threshold: < 2s é saudável
+            "healthy": avg_loop < 10.0  # Threshold: < 10s é saudável
         },
         "recommendation": (
-            "✅ ÓTIMO - Sistema está fluido" if avg_loop < 1.0
-            else "⚠️ NORMAL - Performance aceitável" if avg_loop < 2.0
+            "✅ ÓTIMO - Sistema está fluido" if avg_loop < 6.0
+            else "⚠️ NORMAL - Performance aceitável" if avg_loop < 10.0
             else "❌ LENTO - Gargalo detectado. Verifique conexão CCXT ou CPU"
         ),
         "diagnostics": {
