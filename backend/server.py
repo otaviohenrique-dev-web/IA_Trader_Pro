@@ -386,6 +386,11 @@ async def sniper_loop():
     consecutive_signals = 0
     last_signal = 0
 
+   # 🚀 CORREÇÃO: Pausa o loop até que o modelo da IA esteja totalmente carregado
+    while model is None:
+        state["status"] = "🧠 Inicializando Rede Neural..."
+        await asyncio.sleep(1)
+
     while True:
         try:
             loop_start_time = time.time()
@@ -948,7 +953,8 @@ async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = H
             import shutil
             shutil.copyfileobj(file.file, buffer)
         
-        load_brain(MODEL_PATH)
+        # 🚀 CORREÇÃO: Carrega o modelo sem congelar o servidor web
+        await asyncio.to_thread(load_brain, MODEL_PATH)
         
         state["adaptation"]["generation"] += 1
         state["adaptation"]["learning_state"] = "NOVA GERAÇÃO INJETADA"
