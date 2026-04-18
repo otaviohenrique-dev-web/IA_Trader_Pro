@@ -167,12 +167,20 @@ def run_startup_backtest(df_clean, model_instance):
     return round((test_wins/tot)*100, 1) if tot > 0 else 50.0
 
 def load_brain(path=MODEL_PATH):
+    """Carrega modelo de forma síncrona."""
     global model
     try:
         if os.path.exists(path):
+            print(f">>> 🧠 Carregando modelo: {path}")
             model = RecurrentPPO.load(path, device="cpu")
-            print(f">>> 🧠 CÉREBRO CARREGADO: {path}")
-    except Exception as e: print(f"❌ Erro neural: {e}")
+            print(f">>> ✅ Modelo carregado com sucesso")
+        else:
+            print(f"⚠️ Arquivo não encontrado: {path}")
+            model = None
+    except Exception as e:
+        print(f"❌ Erro ao carregar modelo: {type(e).__name__}: {e}")
+        model = None
+
 
 def get_uptime():
     seconds = int(time.time() - START_TIME)
@@ -619,12 +627,41 @@ async def sniper_loop():
 # --- FASTAPI E ROTAS (Pylance Fix: Fora de funções) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    load_brain(MODEL_PATH)
-    t1 = asyncio.create_task(sniper_loop())
-    t2 = asyncio.create_task(analyst_market_loop())
+    """
+    ⚡⚡⚡ LIFESPAN MÍNIMO - Startup INSTANTÂNEO
+    
+    Estratégia:
+    1. FastAPI já = pronta para receber conexões
+    2. Todos os loops em background (não bloqueador)
+    3. Modelo carrega em thread (zero efeito no startup)
+    """
+    print(">>> 🚀 FastAPI iniciando...")
+    
+    # ✅ BACKGROUND TASKS - Não bloqueam
+    try:
+        # Inicia loops de trading em paralelo (fire-and-forget)
+        asyncio.create_task(sniper_loop())
+        asyncio.create_task(analyst_market_loop())
+        
+        # Carrega modelo em thread (não bloqueia)
+        if os.path.exists(MODEL_PATH):
+            asyncio.create_task(asyncio.to_thread(load_brain, MODEL_PATH))
+        else:
+            print(f"⚠️ Modelo não encontrado em {MODEL_PATH}")
+        
+        print(">>> ✅ FastAPI PRONTA na porta!")
+        
+    except Exception as e:
+        print(f"❌ Erro no startup: {type(e).__name__}: {e}")
+        # NÃO FALHA - Continua mesmo com erro
+    
+    # ✅ YIELD IMEDIATAMENTE - Nunca bloqueia!
     yield
-    t1.cancel(); t2.cancel()
-    if exchange: await exchange.close()
+    
+    # Cleanup (raramente executado em Render)
+    print(">>> 🛑 Encerrando...")
+
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -812,8 +849,28 @@ async def root():
 # INICIALIZAÇÃO DO SERVIDOR
 # ==========================================
 if __name__ == "__main__":
+    """
+    ⚠️ SOMENTE PARA TESTES LOCAIS
+    
+    Em produção (Render), usar:
+    uvicorn server:app --host 0.0.0.0 --port $PORT
+    """
     import uvicorn
     import os
+    
     port = int(os.environ.get("PORT", 10000))
-    # Importante: usar o formato de string "server:app" para o Render
-    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
+    host = os.environ.get("HOST", "0.0.0.0")
+    
+    print(f">>> 🚀 Iniciando servidor em {host}:{port}")
+    print(f">>> 📍 URL: http://{host}:{port}")
+    print(f">>> 🔗 WebSocket: ws://{host}:{port}/ws")
+    
+    # Modo com reload para desenvolvimento
+    uvicorn.run(
+        "server:app",
+        host=host,
+        port=port,
+        reload=False,  # Desabilitar reload no Render
+        log_level="info",
+        access_log=True
+    )
