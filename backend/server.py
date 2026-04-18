@@ -102,6 +102,12 @@ state = {
         "sentiment_score": 0.0,
         "risk_level": "BAIXO",
         "last_headlines": []
+    },
+    "performance": {
+        "loop_avg_ms": 0.0,
+        "loop_max_ms": 0.0,
+        "healthy": True,
+        "status": "Inicializando..."
     }
 }
 
@@ -112,6 +118,22 @@ episode_starts = np.ones((1,), dtype=bool)
 feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct']
 last_analysis_time = 0
 cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
+
+# --- PERFORMANCE MONITORING ---
+loop_start_time = 0
+loop_times = []  # Histórico dos últimos 10 loops
+max_loop_time = 1.0
+
+def log_loop_performance(loop_duration):
+    """Track performance para identificar gargalos."""
+    global loop_times
+    loop_times.append(loop_duration)
+    if len(loop_times) > 10: 
+        loop_times.pop(0)
+    
+    avg_time = sum(loop_times) / len(loop_times)
+    if loop_duration > 2.0:  # Alerta se > 2s
+        print(f"⚠️ LOOP LENTO: {loop_duration:.2f}s (média: {avg_time:.2f}s)")
 
 # --- FUNÇÕES DE SUPORTE ---
 
@@ -337,31 +359,73 @@ async def sniper_loop():
 
     while True:
         try:
+            loop_start_time = time.time()
             now_ts = int(time.time())
             
             # 1. BUSCA DE DADOS (A cada 15s para poupar API)
             if now_ts - last_fetch_ts > 15 or last_fetch_ts == 0:
-                ohlcv = await exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=500)
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                try:
+                    print(f">>> 📊 Buscando OHLCV (timeout: 10s)...")
+                    # ✅ TIMEOUT PROTETOR: máximo 10 segundos
+                    ohlcv = await asyncio.wait_for(
+                        exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=500),
+                        timeout=10.0
+                    )
+                    print(f">>> ✅ OHLCV recebido ({len(ohlcv)} velas)")
+                    
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    
+                    # ✅ OTIMIZAÇÃO: Cálculos vetorizados em paralelo
+                    df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
+                    df['rsi'] = ta.rsi(df['close'], length=14)
+                    df['rsi_slope'] = df['rsi'].diff()
+                    
+                    # ✅ Cache intermediário para evitar recálculo
+                    macd = ta.macd(df['close'])
+                    macd_col = [c for c in macd.columns if c.startswith('MACDh') or c.startswith('MACDH')][0]
+                    df['macd_diff'] = macd[macd_col]
+                    
+                    bb = ta.bbands(df['close'], length=20, std=2)
+                    upper_col = [c for c in bb.columns if c.startswith('BBU')][0]
+                    lower_col = [c for c in bb.columns if c.startswith('BBL')][0]
+                    width_col = [c for c in bb.columns if c.startswith('BBB')][0]
+                    df['bb_pband'] = (df['close'] - bb[lower_col]) / (bb[upper_col] - bb[lower_col])
+                    df['bb_width'] = bb[width_col]
+                    
+                    df['ema50'] = ta.ema(df['close'], length=50)
+                    df['ema200'] = ta.ema(df['close'], length=200)
+                    df['dist_ema50'] = (df['close'] - df['ema50']) / df['ema50']
+                    df['dist_ema200'] = (df['close'] - df['ema200']) / df['ema200']
+                    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+                    df['atr_pct'] = df['atr'] / df['close']
+                    
+                    df_clean = df.dropna().copy()
+                    last_fetch_ts = now_ts
+                    print(f">>> ✅ Indicadores calculados ({len(df_clean)} velas limpas)")
+                    
+                except asyncio.TimeoutError:
+                    print(f"❌ TIMEOUT: fetch_ohlcv demorou > 10s. Pulando esta iteração.")
+                    state["status"] = "⚠️ Lentidão na API - Recuperando..."
+                    await asyncio.sleep(1)
+                    continue
+                except Exception as e:
+                    print(f"❌ Erro ao buscar OHLCV: {type(e).__name__}: {e}")
+                    state["status"] = "❌ Erro conexão API"
+                    await asyncio.sleep(2)
+                    continue
                 
-                # Cálculo de Indicadores
-                df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
-                df['rsi'] = ta.rsi(df['close'], length=14)
-                df['rsi_slope'] = df['rsi'].diff()
-                df['ema200'] = ta.ema(df['close'], length=200)
-                df['dist_ema200'] = (df['close'] - df['ema200']) / df['ema200']
-                df['atr_pct'] = ta.atr(df['high'], df['low'], df['close'], length=14) / df['close']
-                df['bb_pband'], df['bb_width'], df['macd_diff'], df['dist_ema50'] = 0, 0, 0, 0
-                df_clean = df.dropna().copy()
-                last_fetch_ts = now_ts
-                
-                # Log de Velas para CSV
-                closed_candle_ts = ohlcv[-2][0] 
+                # Log de salvamento de vela
+                closed_candle_ts = ohlcv[-2][0] if len(ohlcv) >= 2 else 0
                 if closed_candle_ts > last_saved_candle_ts:
-                    if not os.path.exists("data"): os.makedirs("data")
-                    df.iloc[:-1].tail(1).to_csv(DATA_PATH, mode='a', header=not os.path.exists(DATA_PATH), index=False)
-                    last_saved_candle_ts = closed_candle_ts
+                    if not os.path.exists("data"): 
+                        os.makedirs("data")
+                    try:
+                        df.iloc[:-1].tail(1).to_csv(DATA_PATH, mode='a', header=not os.path.exists(DATA_PATH), index=False)
+                        last_saved_candle_ts = closed_candle_ts
+                    except Exception as e:
+                        print(f"⚠️ Erro ao salvar CSV: {e}")
+
 
             # 2. LÓGICA DE DECISÃO E PnL
             if model and 'df_clean' in locals() and len(df_clean) > 0:
@@ -398,11 +462,28 @@ async def sniper_loop():
                         state["status"] = "📊 AGUARDANDO SINAL..."
 
                 else:
-                    # IA PREDIÇÃO
-                    obs = last_row[feature_cols].values.astype(np.float32)
-                    action, lstm_states = model.predict(obs, state=lstm_states, episode_start=episode_starts, deterministic=True)
-                    episode_starts = np.zeros((1,), dtype=bool)
-                    act_idx = action.item()
+                    # IA PREDIÇÃO (com timeout protetor)
+                    try:
+                        obs = last_row[feature_cols].values.astype(np.float32)
+                        # ✅ TIMEOUT: máximo 3s para predição
+                        action, lstm_states = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                model.predict, obs, 
+                                state=lstm_states, 
+                                episode_start=episode_starts, 
+                                deterministic=True
+                            ),
+                            timeout=3.0
+                        )
+                        episode_starts = np.zeros((1,), dtype=bool)
+                        act_idx = action.item()
+                    except asyncio.TimeoutError:
+                        print(f"⚠️ TIMEOUT: IA predição > 3s, mantendo posição atual")
+                        act_idx = 0  # Ação neutra (não faz nada)
+                        episode_starts = np.ones((1,), dtype=bool)  # Reset LSTM
+                    except Exception as e:
+                        print(f"❌ Erro na predição IA: {type(e).__name__}: {e}")
+                        act_idx = 0
 
                     # Validação de Sinais
                     if act_idx != 0 and act_idx == last_signal: consecutive_signals += 1
@@ -494,7 +575,30 @@ async def sniper_loop():
                     "open": last_row['open'], "high": last_row['high'], 
                     "low": last_row['low'], "close": last_row['close']
                 }
-            await asyncio.sleep(1) 
+            
+            # ✅ LOG PERFORMANCE: Medir tempo total do loop
+            loop_duration = time.time() - loop_start_time
+            log_loop_performance(loop_duration)
+            
+            # ✅ ATUALIZAR MÉTRICAS DE PERFORMANCE NO STATE
+            if loop_times:
+                avg_loop = sum(loop_times) / len(loop_times)
+                max_loop = max(loop_times)
+                state["performance"].update({
+                    "loop_avg_ms": round(avg_loop * 1000, 2),
+                    "loop_max_ms": round(max_loop * 1000, 2),
+                    "healthy": avg_loop < 2.0,
+                    "status": (
+                        "✅ ÓTIMO" if avg_loop < 1.0
+                        else "⚠️ NORMAL" if avg_loop < 2.0
+                        else "❌ LENTO"
+                    )
+                })
+            
+            # ✅ SLEEP ADAPTATIVO: garante no mínimo 1s total por loop
+            sleep_time = max(1.0 - loop_duration, 0.1)
+            await asyncio.sleep(sleep_time)
+ 
 
         except Exception as e:
             print(f"❌ Erro no Loop Sniper: {e}")
@@ -568,20 +672,72 @@ async def get_historico():
 @app.get("/health")
 async def health():
     """Verificação de saúde básica do servidor."""
+    global loop_times
+    avg_loop = sum(loop_times) / len(loop_times) if loop_times else 0
+    
     return {
         "status": "online",
         "timestamp": datetime.now().isoformat(),
-        "uptime": get_uptime()
+        "uptime": get_uptime(),
+        "loop_health": {
+            "avg_ms": round(avg_loop * 1000, 2),
+            "healthy": avg_loop < 2.0  # Deve ser < 2s
+        }
     }
 
 @app.get("/api/health")
 async def api_health():
     """Endpoint CORS-friendly para verificar saúde."""
+    global loop_times
+    avg_loop_time = sum(loop_times) / len(loop_times) if loop_times else 0
+    max_loop = max(loop_times) if loop_times else 0
+    
     return {
         "status": "ok",
         "backend": "online",
         "timestamp": datetime.now().isoformat(),
-        "cors": "enabled"
+        "cors": "enabled",
+        "performance": {
+            "avg_loop_ms": round(avg_loop_time * 1000, 2),
+            "max_loop_ms": round(max_loop * 1000, 2),
+            "loop_count": len(loop_times)
+        }
+    }
+
+@app.get("/api/performance")
+async def performance_metrics():
+    """Retorna métricas detalhadas de performance do sistema."""
+    global loop_times
+    
+    if not loop_times:
+        return {
+            "status": "initializing",
+            "message": "Sistema ainda está inicializando..."
+        }
+    
+    avg_loop = sum(loop_times) / len(loop_times)
+    min_loop = min(loop_times)
+    max_loop = max(loop_times)
+    
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "loop_metrics": {
+            "avg_ms": round(avg_loop * 1000, 2),
+            "min_ms": round(min_loop * 1000, 2),
+            "max_ms": round(max_loop * 1000, 2),
+            "samples": len(loop_times),
+            "healthy": avg_loop < 2.0  # Threshold: < 2s é saudável
+        },
+        "recommendation": (
+            "✅ ÓTIMO - Sistema está fluido" if avg_loop < 1.0
+            else "⚠️ NORMAL - Performance aceitável" if avg_loop < 2.0
+            else "❌ LENTO - Gargalo detectado. Verifique conexão CCXT ou CPU"
+        ),
+        "diagnostics": {
+            "fetch_timeout_enabled": True,
+            "prediction_timeout_enabled": True,
+            "adaptive_sleep_enabled": True
+        }
     }
 
 @app.websocket("/ws")
