@@ -472,7 +472,8 @@ async def sniper_loop():
                     state["status"] = "Reinício: executando backtest..."
                     startup_timer += 1
                     if startup_timer == 1:
-                        res = run_startup_backtest(df_clean, model)
+                        # OTIMIZAÇÃO: Roda o backtest pesado em uma thread paralela
+                        res = await asyncio.to_thread(run_startup_backtest, df_clean, model)
                         state["adaptation"]["initial_win_rate"] = res
                         state["adaptation"]["current_win_rate"] = res
                     if startup_timer > 2: 
