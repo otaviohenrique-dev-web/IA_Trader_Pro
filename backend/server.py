@@ -391,11 +391,11 @@ async def sniper_loop():
             now_ts = int(time.time())
             
             # 1. BUSCA DE DADOS (A cada 15s para poupar API)
-            if now_ts - last_fetch_ts > 15 or last_fetch_ts == 0:
+            if now_ts - last_fetch_ts > 60 or last_fetch_ts == 0:
                 try:
                     print(f">>> 📊 Buscando OHLCV (timeout: 10s)...")
                     ohlcv = await asyncio.wait_for(
-                        exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=500),
+                        exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=250),
                         timeout=10.0
                     )
                     print(f">>> ✅ OHLCV recebido ({len(ohlcv)} velas)")
