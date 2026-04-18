@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import pandas_ta_classic as ta
 import ccxt.async_support as ccxt
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
 import gc
@@ -689,40 +688,46 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# ✅ Adicionar middleware de CORS PERMISSIVO antes do middleware CORS
+# ✅ Middleware CORS Permissivo (Único - sem conflitos)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 class PermissiveCORSMiddleware(BaseHTTPMiddleware):
-    """Middleware CORS permissivo que funciona com WebSocket."""
+    """Middleware CORS permissivo que funciona PERFEITAMENTE com WebSocket."""
     async def dispatch(self, request, call_next):
-        # Permitir OPTIONS (preflight) para WebSocket
+        # Respond to preflight requests immediately (WEBSOCKET HANDSHAKE)
         if request.method == "OPTIONS":
             return Response(
                 status_code=200,
                 headers={
                     "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "*",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Max-Age": "3600",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Origin",
+                    "Access-Control-Max-Age": "86400",
+                    "Access-Control-Allow-Credentials": "false",
                 }
             )
-        response = await call_next(request)
+        
+        # Process normal requests and add CORS headers
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            print(f">>> ⚠️ ERRO no middleware antes de call_next: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Retorna erro 500 com CORS headers
+            response = Response(status_code=500, content="Internal Server Error")
+        
+        # ADD CORS HEADERS TO RESPONSE
         response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Upgrade, Connection, Sec-WebSocket-Key, Sec-WebSocket-Version, Origin"
+        response.headers["Access-Control-Expose-Headers"] = "*"
+        
         return response
 
-# Adicionar o middleware ANTES dos outros middlewares
+# ✅ ADICIONAR MIDDLEWARE (APENAS ESTE - SEM O CORSMiddleware PADRÃO)
 app.add_middleware(PermissiveCORSMiddleware)
-
-# Configure CORS ANTES de qualquer rota - PERMISSIVO para WebSocket e API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # ⚠️ Permite todas as origens (necessário para WebSocket funcionar em produção)
-    allow_credentials=False,  # WebSocket não suporta credentials com allow_origins=["*"]
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
-)
 
 @app.get("/api/state")
 async def get_state_snapshot():
@@ -823,68 +828,91 @@ async def performance_metrics():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket com logging detalhado para diagnosticar problemas."""
+    """WebSocket com logging detalhado para diagnosticar problemas de handshake."""
     client_id = None
     try:
-        print(f">>> [WS] Nova conexão: {websocket.client}")
-        print(f">>> [WS] Headers: {dict(websocket.headers)}")  # Debug: mostrar headers
+        # 1️⃣ LOG: Receber conexão
+        print(f">>> [WS] 📥 Nova conexão iniciada: {websocket.client}")
         
-        # LOGGING: Verificar estado da aplicação antes de aceitar
+        # 2️⃣ VALIDAÇÃO: Estado da aplicação
         if state is None:
-            print(f">>> [WS] ❌ ERRO CRÍTICO: State é None! Fechando conexão.")
-            try:
-                await websocket.close(code=1011, reason="State not initialized")
-            except Exception as close_err:
-                print(f">>> [WS] Erro ao fechar: {close_err}")
+            print(f">>> [WS] ❌ ERRO CRÍTICO: State é None!")
+            await websocket.close(code=1011, reason="Application not ready")
             return
         
-        print(f">>> [WS] Aceitando conexão...")
+        # 3️⃣ ACEITAÇÃO: WebSocket handshake
+        print(f">>> [WS] 🤝 Iniciando handshake...")
         try:
             await websocket.accept()
-            print(f">>> [WS] ✅ WebSocket aceito com SUCESSO para {websocket.client}")
+            print(f">>> [WS] ✅ HANDSHAKE bem-sucedido com {websocket.client}")
+        except RuntimeError as re:
+            if "client_state" in str(re).lower() or "closed" in str(re).lower():
+                print(f">>> [WS] ℹ️ Cliente desconectou durante handshake: {re}")
+                return
+            else:
+                print(f">>> [WS] ❌ ERRO ao aceitar handshake: {re}")
+                import traceback
+                traceback.print_exc()
+                return
         except Exception as accept_err:
-            print(f">>> [WS] ❌ ERRO ao aceitar: {type(accept_err).__name__}: {accept_err}")
+            print(f">>> [WS] ❌ ERRO crítico ao aceitar: {type(accept_err).__name__}: {accept_err}")
             import traceback
             traceback.print_exc()
+            try:
+                await websocket.close(code=1011, reason="Handshake failed")
+            except:
+                pass
             return
         
         client_id = str(websocket.client) if websocket.client else "unknown"
-        print(f">>> [WS] ✅ Conexão aceita: {client_id}")
+        
+        # 4️⃣ LOOP: Enviar estado continuamente
+        print(f">>> [WS] 🔄 Iniciando loop de envio para {client_id}")
         
         while True:
             try:
-                # Cria uma cópia segura do state para serialização
+                # Cria uma cópia segura do state para serialização JSON
                 safe_state = json.loads(json.dumps(state, default=str))
                 await websocket.send_json(safe_state)
                 await asyncio.sleep(1)
+                
             except asyncio.CancelledError:
-                print(f">>> [WS] {client_id} cancelado")
+                print(f">>> [WS] {client_id} foi cancelado (asyncio)")
                 break
+                
             except RuntimeError as re:
-                # WebSocket já foi fechado pelo cliente
-                if "WebSocket" in str(re) and "disconnected" in str(re).lower():
-                    print(f">>> [WS] {client_id} desconectado pelo cliente")
-                    break
+                # WebSocket já foi fechado
+                error_msg = str(re).lower()
+                if "disconnected" in error_msg or "closed" in error_msg:
+                    print(f">>> [WS] {client_id} desconectou (RuntimeError)")
                 else:
-                    print(f">>> [WS] ❌ RuntimeError enviando para {client_id}: {re}")
-                    break
-            except Exception as e:
-                # Qualquer outra exception (incluindo ConnectionClosedOK se existir)
-                error_name = type(e).__name__
-                if "closed" in error_name.lower() or "disconnect" in str(e).lower():
-                    print(f">>> [WS] {client_id} desconectado: {error_name}")
-                else:
-                    print(f">>> [WS] ❌ Erro enviando para {client_id}: {error_name}: {str(e)[:100]}")
+                    print(f">>> [WS] ❌ RuntimeError para {client_id}: {re}")
                 break
+                
+            except Exception as e:
+                # Qualquer outro erro (desconexão graciosa ou inesperada)
+                error_name = type(e).__name__
+                error_msg = str(e).lower()
+                
+                if ("closed" in error_name.lower() or "disconnect" in error_msg or 
+                    "closed" in error_msg or "1000" in error_msg or "1001" in error_msg):
+                    print(f">>> [WS] {client_id} desconectado normalmente")
+                else:
+                    print(f">>> [WS] ❌ {error_name} para {client_id}: {str(e)[:80]}")
+                break
+    
     except Exception as e:
-        print(f">>> [WS] ❌ ERRO GERAL ao configurar WebSocket: {type(e).__name__}: {str(e)[:100]}")
+        # Erro no setup ANTES do loop
+        print(f">>> [WS] ❌ ERRO PRÉ-SETUP: {type(e).__name__}: {str(e)[:100]}")
         import traceback
         traceback.print_exc()
+        
+        # Tenta fechar graciosamente
         try:
             if websocket.client_state != WebSocketState.DISCONNECTED:
-                await websocket.close(code=1011, reason=f"Server error")
-        except Exception as close_err:
-            print(f">>> [WS] Erro final ao fechar: {close_err}")
+                await websocket.close(code=1011, reason="Setup error")
+        except:
+            pass
 
 # ==========================================
 # 🧬 ROTAS DO DOJO (PROTOCOLO APOCALIPSE)
