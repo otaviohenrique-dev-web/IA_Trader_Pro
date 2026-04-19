@@ -833,88 +833,29 @@ def sanitize_state(obj):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket com logging detalhado, tratamento de proxy e desconexão graciosa."""
-    client_id = None
-    try:
-        # Identificando o IP real por trás do proxy do Render
-        real_ip = websocket.headers.get("x-forwarded-for", "IP Desconhecido")
-        client_host = websocket.client.host if websocket.client else "Desconhecido"
-        client_id = f"{client_host} (Real: {real_ip})"
-        
-        # 1️⃣ LOG: Receber conexão
-        print(f">>> [WS] 📥 Nova conexão iniciada: {client_id}")
-        
-        # 2️⃣ VALIDAÇÃO: Estado da aplicação
-        if state is None:
-            print(f">>> [WS] ❌ ERRO CRÍTICO: State é None!")
-            await websocket.close(code=1011, reason="Application not ready")
-            return
-        
-        # 3️⃣ ACEITAÇÃO: WebSocket handshake
-        print(f">>> [WS] 🤝 Iniciando handshake...")
-        try:
-            await websocket.accept()
-            print(f">>> [WS] ✅ HANDSHAKE bem-sucedido com {client_id}")
-        except RuntimeError as re:
-            if "client_state" in str(re).lower() or "closed" in str(re).lower():
-                print(f">>> [WS] ℹ️ Cliente desconectou durante handshake: {re}")
-                return
-            else:
-                print(f">>> [WS] ❌ ERRO ao aceitar handshake: {re}")
-                import traceback
-                traceback.print_exc()
-                return
-        except Exception as accept_err:
-            print(f">>> [WS] ❌ ERRO crítico ao aceitar: {type(accept_err).__name__}: {accept_err}")
-            try:
-                await websocket.close(code=1011, reason="Handshake failed")
-            except:
-                pass
-            return
-        
-        # 4️⃣ LOOP: Enviar estado continuamente
-        print(f">>> [WS] 🔄 Iniciando loop de envio para {client_id}")
-        
-        while True:
-            try:
-               # Cria cópia, higieniza tipos tóxicos e serializa com segurança
-                current_state = copy.deepcopy(state)
-                safe_state = sanitize_state(current_state)
-                safe_state_json = json.loads(json.dumps(safe_state, default=str))
-                
-                await websocket.send_json(safe_state_json)
-                await asyncio.sleep(1)
-                
-            except WebSocketDisconnect:
-                # 🟢 O GRANDE SEGREDO: Captura a desconexão natural do Next.js/Browser
-                print(f">>> [WS] 🟡 {client_id} encerrou a conexão graciosamente (aba fechada/reload)")
-                break
-                
-            except asyncio.CancelledError:
-                print(f">>> [WS] 🟡 Tarefa async de {client_id} foi cancelada pelo servidor")
-                break
-                
-            except RuntimeError as re:
-                error_msg = str(re).lower()
-                if "disconnected" in error_msg or "closed" in error_msg:
-                    print(f">>> [WS] 🟡 {client_id} desconectou (RuntimeError)")
-                else:
-                    print(f">>> [WS] ❌ RuntimeError inesperado para {client_id}: {re}")
-                break
-                
-            except Exception as e:
-                print(f">>> [WS] ❌ Erro inesperado na transmissão para {client_id}: {type(e).__name__}: {str(e)[:100]}")
-                break
+    # 1. Aceita a conexão imediatamente (evita o erro 500 no handshake HTTP)
+    await websocket.accept()
     
+    try:
+        while True:
+            # 2. Copia, sanitiza e serializa o estado
+            current_state = copy.deepcopy(state)
+            safe_state = sanitize_state(current_state)
+            safe_state_json = json.loads(json.dumps(safe_state, default=str))
+            
+            # 3. Dispara para o cliente
+            await websocket.send_json(safe_state_json)
+            await asyncio.sleep(1)
+            
+    except WebSocketDisconnect:
+        # Cliente fechou a aba ou Next.js recarregou. Sai silenciosamente.
+        pass
+    except asyncio.CancelledError:
+        # Tarefa cancelada pelo servidor. Sai silenciosamente.
+        pass
     except Exception as e:
-        print(f">>> [WS] ❌ ERRO PRÉ-SETUP: {type(e).__name__}: {str(e)[:100]}")
-        import traceback
-        traceback.print_exc()
-        try:
-            if websocket.client_state != WebSocketState.DISCONNECTED:
-                await websocket.close(code=1011, reason="Setup error")
-        except:
-            pass
+        # Se der erro grave, loga apenas uma linha e encerra. O front reconecta.
+        print(f">>> [WS] Conexão encerrada ({type(e).__name__})")
 
 
 # ==========================================
