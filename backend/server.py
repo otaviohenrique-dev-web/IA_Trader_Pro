@@ -125,23 +125,6 @@ feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_widt
 last_analysis_time = 0
 cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
 
-# --- PERFORMANCE MONITORING ---
-loop_start_time = 0
-loop_times = []  # Histórico dos últimos 10 loops
-max_loop_time = 1.0
-
-def log_loop_performance(loop_duration):
-    """Track performance para identificar gargalos."""
-    global loop_times
-    loop_times.append(loop_duration)
-    if len(loop_times) > 10: 
-        loop_times.pop(0)
-    
-    avg_time = sum(loop_times) / len(loop_times)
-    # Mudamos a tolerância de 2.0 para 10.0 segundos
-    if loop_duration > 10.0:  
-        print(f"⚠️ LOOP LENTO: {loop_duration:.2f}s (média: {avg_time:.2f}s)")
-
 # --- FUNÇÕES DE SUPORTE ---
 
 def run_startup_backtest(df_clean, model_instance):
@@ -392,10 +375,7 @@ async def sniper_loop():
         await asyncio.sleep(1)
 
     while True:
-        try:
-            loop_start_time = time.time()
-            now_ts = int(time.time())
-            
+        try:            
             # 1. BUSCA DE DADOS (A cada 15s para poupar API)
             if now_ts - last_fetch_ts > 60 or last_fetch_ts == 0:
                 try:
@@ -495,27 +475,23 @@ async def sniper_loop():
 
                 else:
                     # IA PREDIÇÃO (com timeout protetor)
+                    # IA PREDIÇÃO (Execução direta, sem criar threads zumbis)
                     try:
                         obs = last_row[feature_cols].values.astype(np.float32)
-                        # ✅ TIMEOUT: máximo 3s para predição
-                        action, lstm_states = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                model.predict, obs, 
-                                state=lstm_states, 
-                                episode_start=episode_starts, 
-                                deterministic=True
-                            ),
-                            timeout=3.0
+                        
+                        action, lstm_states = model.predict(
+                            obs, 
+                            state=lstm_states, 
+                            episode_start=episode_starts, 
+                            deterministic=True
                         )
+                        
                         episode_starts = np.zeros((1,), dtype=bool)
                         act_idx = action.item()
-                    except asyncio.TimeoutError:
-                        print(f"⚠️ TIMEOUT: IA predição > 3s, mantendo posição atual")
-                        act_idx = 0  # Ação neutra (não faz nada)
-                        episode_starts = np.ones((1,), dtype=bool)  # Reset LSTM
                     except Exception as e:
-                        print(f"❌ Erro na predição IA: {type(e).__name__}: {e}")
+                        print(f">>> [SNIPER] ❌ Erro na predição IA: {type(e).__name__}")
                         act_idx = 0
+                        episode_starts = np.ones((1,), dtype=bool) # Reset LSTM em caso de falha
 
                     # Validação de Sinais
                     if act_idx != 0 and act_idx == last_signal: consecutive_signals += 1
@@ -612,32 +588,12 @@ async def sniper_loop():
                     "low": last_row['low'], "close": last_row['close']
                 }
             
-            # ✅ LOG PERFORMANCE: Medir tempo total do loop
-            loop_duration = time.time() - loop_start_time
-            log_loop_performance(loop_duration)
-            
-            # ✅ ATUALIZAR MÉTRICAS DE PERFORMANCE NO STATE
-            if loop_times:
-                avg_loop = sum(loop_times) / len(loop_times)
-                max_loop = max(loop_times)
-                state["performance"].update({
-                    "loop_avg_ms": round(avg_loop * 1000, 2),
-                    "loop_max_ms": round(max_loop * 1000, 2),
-                    "healthy": avg_loop < 2.0,
-                    "status": (
-                        "✅ ÓTIMO" if avg_loop < 1.0
-                        else "⚠️ NORMAL" if avg_loop < 2.0
-                        else "❌ LENTO"
-                    )
-                })
-            
-            gc.collect() # Limpeza forçada de memória
+            # Limpeza forçada de memória
+            gc.collect() 
 
-            # ✅ SLEEP ADAPTATIVO: garante no mínimo 1s total por loop
-            sleep_time = max(1.0 - loop_duration, 0.1)
-            await asyncio.sleep(sleep_time)
- 
-
+            # Sleep limpo e previsível (descansa 1 segundo entre as iterações)
+            await asyncio.sleep(1.0)
+            
         except Exception as e:
             print(f"❌ Erro no Loop Sniper: {e}")
             
@@ -744,74 +700,24 @@ async def get_historico():
 
 @app.get("/health")
 async def health():
-    """Verificação de saúde básica do servidor."""
-    global loop_times
-    avg_loop = sum(loop_times) / len(loop_times) if loop_times else 0
-    
     return {
         "status": "online",
-        "timestamp": datetime.now().isoformat(),
-        "uptime": get_uptime(),
-        "loop_health": {
-            "avg_ms": round(avg_loop * 1000, 2),
-            "healthy": avg_loop < 10.0  # Tolerância ajustada para < 10s
-        }
+        "uptime": get_uptime()
     }
 
 @app.get("/api/health")
 async def api_health():
-    """Endpoint CORS-friendly para verificar saúde."""
-    global loop_times
-    avg_loop_time = sum(loop_times) / len(loop_times) if loop_times else 0
-    max_loop = max(loop_times) if loop_times else 0
-    
     return {
         "status": "ok",
         "backend": "online",
-        "timestamp": datetime.now().isoformat(),
-        "cors": "enabled",
-        "performance": {
-            "avg_loop_ms": round(avg_loop_time * 1000, 2),
-            "max_loop_ms": round(max_loop * 1000, 2),
-            "loop_count": len(loop_times),
-            "healthy": avg_loop_time < 10.0  # Alinhado com o novo padrão
-        }
+        "cors": "enabled"
     }
 
 @app.get("/api/performance")
 async def performance_metrics():
-    """Retorna métricas detalhadas de performance do sistema."""
-    global loop_times
-    
-    if not loop_times:
-        return {
-            "status": "initializing",
-            "message": "Sistema ainda está inicializando..."
-        }
-    
-    avg_loop = sum(loop_times) / len(loop_times)
-    min_loop = min(loop_times)
-    max_loop = max(loop_times)
-    
     return {
-        "timestamp": datetime.now().isoformat(),
-        "loop_metrics": {
-            "avg_ms": round(avg_loop * 1000, 2),
-            "min_ms": round(min_loop * 1000, 2),
-            "max_ms": round(max_loop * 1000, 2),
-            "samples": len(loop_times),
-            "healthy": avg_loop < 10.0  # Threshold: < 10s é saudável
-        },
-        "recommendation": (
-            "✅ ÓTIMO - Sistema está fluido" if avg_loop < 6.0
-            else "⚠️ NORMAL - Performance aceitável" if avg_loop < 10.0
-            else "❌ LENTO - Gargalo detectado. Verifique conexão CCXT ou CPU"
-        ),
-        "diagnostics": {
-            "fetch_timeout_enabled": True,
-            "prediction_timeout_enabled": True,
-            "adaptive_sleep_enabled": True
-        }
+        "status": "online",
+        "message": "Monitoramento de performance desativado para otimização de CPU."
     }
 
 def sanitize_state(obj):
