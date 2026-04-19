@@ -375,7 +375,10 @@ async def sniper_loop():
         await asyncio.sleep(1)
 
     while True:
-        try:            
+        try:
+            # Obtém o timestamp atual no início de cada iteração
+            now_ts = time.time()
+            
             # 1. BUSCA DE DADOS (A cada 15s para poupar API)
             if now_ts - last_fetch_ts > 60 or last_fetch_ts == 0:
                 try:
