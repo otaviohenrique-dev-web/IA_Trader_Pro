@@ -157,12 +157,19 @@ def run_startup_backtest(df_clean, model_instance):
     return round((test_wins/tot)*100, 1) if tot > 0 else 50.0
 
 def load_brain(path=MODEL_PATH):
-    """Carrega modelo de forma síncrona."""
+    """Carrega modelo de forma síncrona com otimização agressiva de RAM."""
     global model
     try:
         if os.path.exists(path):
             print(f">>> 🧠 Carregando modelo: {path}")
+            # Limpa RAM antes de carregar
+            gc.collect()
+
+            # Carrega o modelo forçando CPU
             model = RecurrentPPO.load(path, device="cpu")
+
+            # Limpa RAM após carregar (sb3 deixa resíduos)
+            gc.collect()
             print(f">>> ✅ Modelo carregado com sucesso")
         else:
             print(f"⚠️ Arquivo não encontrado: {path}")
@@ -170,6 +177,8 @@ def load_brain(path=MODEL_PATH):
     except Exception as e:
         print(f"❌ Erro ao carregar modelo: {type(e).__name__}: {e}")
         model = None
+    finally:
+        gc.collect()
 
 
 def get_uptime():
