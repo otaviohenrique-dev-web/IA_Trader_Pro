@@ -337,7 +337,6 @@ async def analyze_sentiment_with_llm(headlines):
         print(f"⚠️ Erro na análise da IA: {e}")
         # Se a cota estourar ou a API cair, ele mantém o bot rodando com o último status seguro salvo
         return cached_analysis
-
 # --- LOOP PRINCIPAL DO TRADER (SNIPER) ---
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
