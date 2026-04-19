@@ -161,6 +161,13 @@ def load_brain(path=MODEL_PATH):
     global model
     try:
         if os.path.exists(path):
+            # 🛡️ VALIDAÇÃO: Verifica se é um arquivo ZIP válido
+            import zipfile
+            if not zipfile.is_zipfile(path):
+                print(f"❌ Arquivo {path} NÃO é um ZIP válido!")
+                model = None
+                return
+            
             print(f">>> 🧠 Carregando modelo: {path}")
             # Limpa RAM antes de carregar
             gc.collect()
@@ -593,6 +600,18 @@ async def sniper_loop():
                         if len(state["order_book"]) > 50: state["order_book"].pop()
 
                 # Sincronização Final do Estado
+                # 🛡️ Cálculo seguro da taxa de vitória
+                try:
+                    if wins + losses > 0:
+                        win_rate = (wins / (wins + losses)) * 100
+                        # Proteção contra valores absurdos
+                        win_rate = min(100.0, max(0.0, win_rate))
+                        current_win_rate = round(win_rate, 1)
+                    else:
+                        current_win_rate = state["adaptation"]["current_win_rate"]
+                except:
+                    current_win_rate = state["adaptation"]["current_win_rate"]
+                
                 state.update({
                     "in_position": position != 0,
                     "current_position": position,
@@ -601,7 +620,7 @@ async def sniper_loop():
                         **state["adaptation"], 
                         "wins": wins, 
                         "losses": losses, 
-                        "current_win_rate": round((wins/(wins+losses))*100, 1) if (wins+losses)>0 else state["adaptation"]["current_win_rate"]
+                        "current_win_rate": current_win_rate
                     }
                 })
 
@@ -753,10 +772,13 @@ def sanitize_state(obj):
         return [sanitize_state(v) for v in obj]
     elif isinstance(obj, (np.integer, np.floating)):
         val = float(obj)
+        # Proteção contra valores absurdamente altos (5000%+ etc)
         if math.isnan(val) or math.isinf(val): return 0.0
+        if abs(val) > 1_000_000: return 0.0  # Mais de 1 milhão é provavelmente erro
         return val
     elif isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj): return 0.0
+        if abs(obj) > 1_000_000: return 0.0
         return obj
     elif isinstance(obj, np.ndarray):
         return sanitize_state(obj.tolist())
@@ -767,16 +789,23 @@ async def websocket_endpoint(websocket: WebSocket):
     # 1. Aceita a conexão imediatamente (evita o erro 500 no handshake HTTP)
     await websocket.accept()
     
+    last_sent_state = None
     try:
         while True:
-            # 2. Copia, sanitiza e serializa o estado
+            # ⚡ OTIMIZAÇÃO: Detecta mudanças antes de serializar (evita 3s de travamento)
             current_state = copy.deepcopy(state)
-            safe_state = sanitize_state(current_state)
-            safe_state_json = json.loads(json.dumps(safe_state, default=str))
             
-            # 3. Dispara para o cliente
-            await websocket.send_json(safe_state_json)
-            await asyncio.sleep(1)
+            # Só serializa e envia se o estado mudou
+            state_changed = current_state != last_sent_state
+            
+            if state_changed or last_sent_state is None:
+                safe_state = sanitize_state(current_state)
+                safe_state_json = json.loads(json.dumps(safe_state, default=str))
+                await websocket.send_json(safe_state_json)
+                last_sent_state = current_state
+            
+            # Sleep de 500ms (mais responsivo e menos travamento)
+            await asyncio.sleep(0.5)
             
     except WebSocketDisconnect:
         # Cliente fechou a aba ou Next.js recarregou. Sai silenciosamente.
@@ -823,6 +852,16 @@ async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = H
 
         # Escrita robusta do arquivo
         content = await file.read()
+        
+        # 🛡️ VALIDAÇÃO: Verifica se o arquivo é um ZIP válido antes de salvar
+        import zipfile
+        import io
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                zf.testzip()  # Testa integridade do ZIP
+        except Exception as zip_error:
+            raise HTTPException(status_code=400, detail=f"Arquivo inválido ou corrompido: {str(zip_error)}")
+        
         with open(new_model_path, "wb") as buffer:
             buffer.write(content)
 
@@ -831,13 +870,19 @@ async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = H
 
         # 🚀 CORREÇÃO: Carrega o modelo sem congelar o servidor web
         await asyncio.to_thread(load_brain, MODEL_PATH)
+        
+        # ✅ Verifica se carregou com sucesso
+        if model is None:
+            raise Exception("Modelo falhou ao carregar. Arquivo pode estar corrompido.")
 
         state["adaptation"]["generation"] += 1
         state["adaptation"]["learning_state"] = f"NOVA GERAÇÃO INJETADA ({file.filename})"
 
-        return {"status": "sucesso", "mensagem": f"Cérebro '{file.filename}' atualizado e carregado."}
+        return {"status": "sucesso", "mensagem": f"Cérebro '{file.filename}' atualizado e carregado com sucesso!"}
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f">>> ❌ Erro no upload/load do cérebro: {e}")
+        print(f">>> ❌ Erro no upload/load do cérebro: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao processar cérebro: {str(e)}")
     
 @app.get("/")
