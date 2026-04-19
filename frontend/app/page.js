@@ -473,19 +473,36 @@ export default function Dashboard() {
     const connect = () => {
       if (cancelled) return;
       try { ws.current?.close(); } catch (_) { /* noop */ }
+      
+      console.log("🌐 Tentando conectar ao WebSocket:", socketUrl);
       const s = new WebSocket(socketUrl);
       ws.current = s;
-      s.onopen = () => { if (!cancelled) setWsLive(true); };
+      
+      s.onopen = () => { 
+        if (!cancelled) {
+            setWsLive(true);
+            console.log("✅ WebSocket conectado com sucesso!");
+        }
+      };
+      
       s.onmessage = (event) => {
         if (cancelled) return;
         setWsLive(true);
         try { setData(JSON.parse(event.data)); } catch (_) { /* noop */ }
       };
-      s.onerror = () => { if (!cancelled) setWsLive(false); };
-      s.onclose = () => {
+      
+      s.onerror = (err) => { 
+        if (!cancelled) {
+            setWsLive(false);
+            console.warn("⚠️ Oscilação no WebSocket detectada.", err);
+        }
+      };
+      
+      s.onclose = (event) => {
         if (cancelled) return;
         setWsLive(false);
-        pullState();
+        console.log(`🔌 Conexão WS fechada (Código: ${event.code}). Reconectando em 3s...`);
+        pullState(); // Mantém a tela viva via HTTP enquanto o WS não volta
         reconnectRef.current = setTimeout(connect, 3000);
       };
     };

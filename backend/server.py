@@ -17,7 +17,7 @@ from sb3_contrib import RecurrentPPO
 import warnings
 import aiohttp
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File, Header
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Header
 from fastapi.responses import FileResponse
 from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
@@ -833,11 +833,16 @@ def sanitize_state(obj):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket com logging detalhado para diagnosticar problemas de handshake."""
+    """WebSocket com logging detalhado, tratamento de proxy e desconexão graciosa."""
     client_id = None
     try:
+        # Identificando o IP real por trás do proxy do Render
+        real_ip = websocket.headers.get("x-forwarded-for", "IP Desconhecido")
+        client_host = websocket.client.host if websocket.client else "Desconhecido"
+        client_id = f"{client_host} (Real: {real_ip})"
+        
         # 1️⃣ LOG: Receber conexão
-        print(f">>> [WS] 📥 Nova conexão iniciada: {websocket.client}")
+        print(f">>> [WS] 📥 Nova conexão iniciada: {client_id}")
         
         # 2️⃣ VALIDAÇÃO: Estado da aplicação
         if state is None:
@@ -849,7 +854,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f">>> [WS] 🤝 Iniciando handshake...")
         try:
             await websocket.accept()
-            print(f">>> [WS] ✅ HANDSHAKE bem-sucedido com {websocket.client}")
+            print(f">>> [WS] ✅ HANDSHAKE bem-sucedido com {client_id}")
         except RuntimeError as re:
             if "client_state" in str(re).lower() or "closed" in str(re).lower():
                 print(f">>> [WS] ℹ️ Cliente desconectou durante handshake: {re}")
@@ -861,15 +866,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 return
         except Exception as accept_err:
             print(f">>> [WS] ❌ ERRO crítico ao aceitar: {type(accept_err).__name__}: {accept_err}")
-            import traceback
-            traceback.print_exc()
             try:
                 await websocket.close(code=1011, reason="Handshake failed")
             except:
                 pass
             return
-        
-        client_id = str(websocket.client) if websocket.client else "unknown"
         
         # 4️⃣ LOOP: Enviar estado continuamente
         print(f">>> [WS] 🔄 Iniciando loop de envio para {client_id}")
@@ -880,46 +881,41 @@ async def websocket_endpoint(websocket: WebSocket):
                 current_state = copy.deepcopy(state)
                 safe_state = sanitize_state(current_state)
                 safe_state_json = json.loads(json.dumps(safe_state, default=str))
+                
                 await websocket.send_json(safe_state_json)
                 await asyncio.sleep(1)
                 
+            except WebSocketDisconnect:
+                # 🟢 O GRANDE SEGREDO: Captura a desconexão natural do Next.js/Browser
+                print(f">>> [WS] 🟡 {client_id} encerrou a conexão graciosamente (aba fechada/reload)")
+                break
+                
             except asyncio.CancelledError:
-                print(f">>> [WS] {client_id} foi cancelado (asyncio)")
+                print(f">>> [WS] 🟡 Tarefa async de {client_id} foi cancelada pelo servidor")
                 break
                 
             except RuntimeError as re:
-                # WebSocket já foi fechado
                 error_msg = str(re).lower()
                 if "disconnected" in error_msg or "closed" in error_msg:
-                    print(f">>> [WS] {client_id} desconectou (RuntimeError)")
+                    print(f">>> [WS] 🟡 {client_id} desconectou (RuntimeError)")
                 else:
-                    print(f">>> [WS] ❌ RuntimeError para {client_id}: {re}")
+                    print(f">>> [WS] ❌ RuntimeError inesperado para {client_id}: {re}")
                 break
                 
             except Exception as e:
-                # Qualquer outro erro (desconexão graciosa ou inesperada)
-                error_name = type(e).__name__
-                error_msg = str(e).lower()
-                
-                if ("closed" in error_name.lower() or "disconnect" in error_msg or 
-                    "closed" in error_msg or "1000" in error_msg or "1001" in error_msg):
-                    print(f">>> [WS] {client_id} desconectado normalmente")
-                else:
-                    print(f">>> [WS] ❌ {error_name} para {client_id}: {str(e)[:80]}")
+                print(f">>> [WS] ❌ Erro inesperado na transmissão para {client_id}: {type(e).__name__}: {str(e)[:100]}")
                 break
     
     except Exception as e:
-        # Erro no setup ANTES do loop
         print(f">>> [WS] ❌ ERRO PRÉ-SETUP: {type(e).__name__}: {str(e)[:100]}")
         import traceback
         traceback.print_exc()
-        
-        # Tenta fechar graciosamente
         try:
             if websocket.client_state != WebSocketState.DISCONNECTED:
                 await websocket.close(code=1011, reason="Setup error")
         except:
             pass
+
 
 # ==========================================
 # 🧬 ROTAS DO DOJO (PROTOCOLO APOCALIPSE)
