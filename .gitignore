@@ -65,3 +65,6 @@ desktop.ini
 # Logs do Servidor (Uvicorn/Gunicorn)
 access.log
 error.log
+
+DOCUMENTACAO_COMPLETA.md
+render.yaml

@@ -801,26 +801,35 @@ async def download_dados(x_admin_password: str = Header(None)):
 @app.post("/upload-cerebro")
 async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = Header(None)):
     """Injeta uma nova geração lendo a senha de forma invisível no Header."""
+    global MODEL_PATH
     if x_admin_password != ADMIN_PASS:
         raise HTTPException(status_code=401, detail="Acesso Negado. Senha incorreta.")
-    
+
     try:
         if not os.path.exists("models"):
             os.makedirs("models")
-            
-        with open(MODEL_PATH, "wb") as buffer:
-            import shutil
-            shutil.copyfileobj(file.file, buffer)
-        
+
+        # Define o novo caminho baseado no nome do arquivo enviado
+        new_model_path = os.path.join("models", file.filename)
+
+        # Escrita robusta do arquivo
+        content = await file.read()
+        with open(new_model_path, "wb") as buffer:
+            buffer.write(content)
+
+        # Atualiza a variável global para que o sistema aponte para o novo modelo
+        MODEL_PATH = new_model_path
+
         # 🚀 CORREÇÃO: Carrega o modelo sem congelar o servidor web
         await asyncio.to_thread(load_brain, MODEL_PATH)
-        
+
         state["adaptation"]["generation"] += 1
-        state["adaptation"]["learning_state"] = "NOVA GERAÇÃO INJETADA"
-        
-        return {"status": "sucesso", "mensagem": "Cérebro atualizado e carregado."}
+        state["adaptation"]["learning_state"] = f"NOVA GERAÇÃO INJETADA ({file.filename})"
+
+        return {"status": "sucesso", "mensagem": f"Cérebro '{file.filename}' atualizado e carregado."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao salvar: {str(e)}")
+        print(f">>> ❌ Erro no upload/load do cérebro: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao processar cérebro: {str(e)}")
     
 @app.get("/")
 async def root():
