@@ -180,7 +180,16 @@ def get_uptime():
 # --- INICIALIZAÇÃO DO CLIENTE (SDK ATUALIZADO) ---
 from google import genai
 # O cliente puxa a chave direto ou podemos passar explicitamente
-client = genai.Client(api_key=GEMINI_KEY)
+try:
+    if GEMINI_KEY:
+        client = genai.Client(api_key=GEMINI_KEY)
+    else:
+        print(">>> ⚠️ GEMINI_KEY vazia - Tentando carregamento automático...")
+        client = genai.Client()  # Tenta usar variável de ambiente padrão
+except Exception as e:
+    print(f">>> ❌ Erro ao inicializar cliente Genai: {e}")
+    print(">>> ⚠️ Agente de análise de risco desabilitado")
+    client = None
 
 
 # --- AGENTE DE NOTÍCIAS (IA SENTINELA) ---
@@ -289,6 +298,11 @@ async def analyze_sentiment_with_llm(headlines):
 
     if not headlines:
         return {"score": 0.1, "status": "SAFE", "reason": "Mercado calmo (Sem notícias)"}
+    
+    # 🔒 VERIFICA SE O CLIENTE GENAI ESTÁ DISPONÍVEL
+    if not client:
+        print(">>> ⚠️ Cliente Genai não disponível. Retornando análise segura (SAFE).")
+        return {"score": 0.1, "status": "SAFE", "reason": "Cliente IA indisponível - modo técnico"}
     
     # 🧠 PROMPT CALIBRADO: Ensinando a IA a ser um trader frio, não um jornalista assustado
     prompt = f"""
