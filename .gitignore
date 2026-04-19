@@ -1,70 +1,120 @@
-# Ambientes Virtuais
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🔒 GITIGNORE OTIMIZADO - IA Trader Pro
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# ━━ 1. AMBIENTES VIRTUAIS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 backend/venv/
 backend/.venv/
+frontend/node_modules/
 .venv/
 venv/
 env/
-virtualenv/
+ENV/
+.env.venv/
 
-# Dependências e Builds (Node e Python)
+# ━━ 2. DEPENDÊNCIAS E BUILDS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 node_modules/
 .next/
+out/
+.turbo/
 dist/
 build/
 *.egg-info/
-nosetests.xml
-coverage.xml
-htmlcov/
+*.egg/
+.eggs/
+*.whl
+*.tar.gz
 
-# Python Cache & Compilados
+# ━━ 3. CACHE E COMPILADOS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.so
 .pytest_cache/
 .mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+*.cover
 
-# Variáveis de Ambiente (Segurança Crítica)
+# ━━ 4. VARIÁVEIS DE AMBIENTE (SEGURANÇA CRÍTICA) ━━━━━━━━━━━━━━━━
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
 .env.*.local
+.env.production
+.env.development
+.env.test
 *.env
+!.env.example
 
-# Dados do Bot (Arquivos Dinâmicos e CSVs)
-backend/data/*.csv
-data/live_market_data.csv
+# ━━ 5. DADOS DINÂMICOS E CSVs (Regeneráveis) ━━━━━━━━━━━━━━━━━━━━
+backend/data/**/*.csv
+data/**/*.csv
+live_market_data.csv
+mercado_real_*.csv
 *.log
-backend/*.log
+backend/**/*.log
 
-# Inteligência Artificial (Modelos e Logs)
-# O treinamento e os pesos são injetados via Dojo
+# ━━ 6. MODELOS DE IA E WEIGHTS (Injetados via Dojo) ━━━━━━━━━━━━━
 backend/tensorboard_logs/
 tensorboard_logs/
-backend/models/*.zip
-backend/models/*.pth
-backend/models/*.h5
+backend/models/**/*.zip
+backend/models/**/*.pth
+backend/models/**/*.h5
+backend/models/**/*.pt
+backend/models/**/*.onnx
+runs/
 
-# Scripts de Treinamento e Reconstrução
-# (Proteção de Propriedade Intelectual do Modelo)
-reconstruct_gen_7.py
+# ━━ 7. SCRIPTS DE DESENVOLVIMENTO E PROPRIEDADE INTELECTUAL ━━━━━
+reconstruct_gen_*.py
 train_*.py
-test_*.py
+train*.py
+test_port_*.py
+**/*_private.py
+**/*_secret.py
 
-# Configurações de Editores e Sistema
+# ━━ 8. IDE E EDITORES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 .DS_Store
 Thumbs.db
 desktop.ini
+*.sublime-project
+*.sublime-workspace
 
-# Logs do Servidor (Uvicorn/Gunicorn)
-access.log
-error.log
-
+# ━━ 9. DOCUMENTAÇÃO GERADA (Regenerável) ━━━━━━━━━━━━━━━━━━━━━━━
 DOCUMENTACAO_COMPLETA.md
 render.yaml
+
+# ━━ 10. OS E SISTEMA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ━━ 11. COVERAGE E TESTES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+nosetests.xml
+.hypothesis/
+
+# ━━ 12. ARQUIVOS TEMPORÁRIOS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*.tmp
+*.temp
+*.bak
+*.swn
+.env.bak
+
+# ━━ 13. DEPENDÊNCIAS LOCK (Opcionais, manter ou remover conforme necessário)
+# package-lock.json  # Descomente para ignorar locks de dependências
+# poetry.lock
+# pipenv.lock
