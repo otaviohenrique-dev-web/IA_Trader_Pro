@@ -1,1 +1,1 @@
-web: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips="*"
+web: cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips="*" --loop asyncio --http h11
