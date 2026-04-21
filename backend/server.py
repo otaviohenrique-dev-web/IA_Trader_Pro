@@ -25,18 +25,21 @@ warnings.filterwarnings("ignore")
 # Trava o PyTorch para não estrangular a CPU do Render
 torch.set_num_threads(1)
 
-# --- OTIMIZADOR DE JSON (Evita travar a CPU e a RAM) ---
-class SystemEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer): return int(obj)
-        if isinstance(obj, np.floating):
-            val = float(obj)
-            if math.isnan(val) or math.isinf(val): return 0.0
-            return val
-        if isinstance(obj, np.ndarray): return obj.tolist()
-        if isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj): return 0.0
-        return str(obj)
+# --- SANITIZADOR UNIVERSAL (Elimina o veneno do NaN do Javascript) ---
+def clean_nans(obj):
+    if isinstance(obj, dict):
+        return {k: clean_nans(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nans(v) for v in obj]
+    elif isinstance(obj, float):
+        return 0.0 if math.isnan(obj) or math.isinf(obj) else obj
+    elif isinstance(obj, np.floating):
+        return 0.0 if np.isnan(obj) or np.isinf(obj) else float(obj)
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.ndarray):
+        return clean_nans(obj.tolist())
+    return obj
 
 # --- CONFIGURAÇÕES DO SISTEMA ---
 SYMBOL = 'BTC/USDT'
@@ -733,10 +736,7 @@ app.add_middleware(
 async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
     try:
-        # Serialização ultrarrápida via Encoder
-        state_str = json.dumps(state, cls=SystemEncoder)
-        state_str = state_str.replace(": NaN", ": 0.0").replace(": Infinity", ": 0.0").replace(": -Infinity", ": 0.0")
-        safe_state = json.loads(state_str)
+        safe_state = clean_nans(state)
         return safe_state
     except Exception as e:
         print(f">>> ❌ Erro ao retornar state: {e}")
@@ -794,8 +794,8 @@ async def websocket_endpoint(websocket: WebSocket):
     last_sent_state = None
     try:
         while True:
-            # ⚡ OTIMIZAÇÃO EXTREMA: Serialização direta nativa sem bloquear thread
-            state_str = json.dumps(state, cls=SystemEncoder)
+            safe_state = clean_nans(state)
+            state_str = json.dumps(safe_state)
             
             if state_str != last_sent_state:
                 await websocket.send_text(state_str)

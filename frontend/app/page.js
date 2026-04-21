@@ -464,12 +464,18 @@ export default function Dashboard() {
       try {
         const res = await fetch(`${httpBase}/api/state`);
         if (res.ok && !cancelled) {
-            setData(await res.json());
-            setWsLive(true); // Usamos a variável wsLive para acender a luz verde
+            const text = await res.text();
+            try {
+                setData(JSON.parse(text));
+                setWsLive(true);
+            } catch (err) {
+                console.error("❌ ERRO JSON PARSE (Backend enviou algo que não é JSON puro):", err, text);
+                setWsLive(false);
+            }
         } else {
             setWsLive(false);
         }
-      } catch (_) { /* backend off */ }
+      } catch (err) { console.error("❌ ERRO DE CONEXÃO FETCH:", err); setWsLive(false); }
     };
 
     pullState().finally(() => { if (!cancelled) setHydrated(true); });
