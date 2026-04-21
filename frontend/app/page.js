@@ -458,65 +458,30 @@ export default function Dashboard() {
 
   useEffect(() => {
     const httpBase = backendHttpBase();
-    const socketUrl = backendWsUrl();
     let cancelled = false;
 
     const pullState = async () => {
       try {
         const res = await fetch(`${httpBase}/api/state`);
-        if (res.ok && !cancelled) setData(await res.json());
+        if (res.ok && !cancelled) {
+            setData(await res.json());
+            setWsLive(true); // Usamos a variável wsLive para acender a luz verde
+        } else {
+            setWsLive(false);
+        }
       } catch (_) { /* backend off */ }
     };
 
     pullState().finally(() => { if (!cancelled) setHydrated(true); });
 
-    const connect = () => {
-      if (cancelled) return;
-      try { ws.current?.close(); } catch (_) { /* noop */ }
-      
-      console.log("🌐 Tentando conectar ao WebSocket:", socketUrl);
-      const s = new WebSocket(socketUrl);
-      ws.current = s;
-      
-      s.onopen = () => { 
-        if (!cancelled) {
-            setWsLive(true);
-            console.log("✅ WebSocket conectado com sucesso!");
-        }
-      };
-      
-      s.onmessage = (event) => {
-        if (cancelled) return;
-        setWsLive(true);
-        try { setData(JSON.parse(event.data)); } catch (_) { /* noop */ }
-      };
-      
-      s.onerror = (err) => { 
-        if (!cancelled) {
-            setWsLive(false);
-            console.warn("⚠️ Oscilação no WebSocket detectada.", err);
-        }
-      };
-      
-      s.onclose = (event) => {
-        if (cancelled) return;
-        setWsLive(false);
-        console.log(`🔌 Conexão WS em espera. Retentando em 3s...`);
-        reconnectRef.current = setTimeout(connect, 3000);
-      };
-    };
-    connect();
-
     const poll = setInterval(() => {
-      if (cancelled || ws.current?.readyState === WebSocket.OPEN) return;
+      if (cancelled) return;
       pullState();
-    }, 4000);
+    }, 2000); // Faz a busca silenciosa e rápida a cada 2 segundos
 
     return () => {
       cancelled = true;
       clearInterval(poll);
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      try { ws.current?.close(); } catch (_) { /* noop */ }
     };
   }, []);
 
@@ -551,7 +516,12 @@ export default function Dashboard() {
         <div className="flex flex-col items-end gap-1">
           {!wsLive && (
             <span className="text-[10px] font-mono text-amber-400 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded">
-              WebSocket offline — atualização por HTTP
+              Aguardando conexão com API...
+            </span>
+          )}
+          {wsLive && (
+            <span className="text-[10px] font-mono text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded">
+              Sincronizado (Tempo Real)
             </span>
           )}
           <div className="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 font-mono text-xs flex items-center gap-2">
