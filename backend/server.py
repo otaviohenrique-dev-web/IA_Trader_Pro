@@ -417,22 +417,29 @@ async def sniper_loop():
     last_signal = 0
 
     # 🚀 OTIMIZAÇÃO: Começa a processar MESMO sem o modelo (estado aguardando)
+    # MAX timeout 10 segundos - depois continua mesmo sem modelo
     model_ready_at = time.time()
-    while True:
-        if model is not None:
-            if time.time() - model_ready_at < 1.0:
-                print(f">>> ✅ SNIPER_LOOP: Modelo PRONTO! Iniciando operação em 1s...")
-                await asyncio.sleep(1)
-            break
-        state["status"] = "🧠 Inicializando Rede Neural..."
+    model_wait_start = model_ready_at
+    while model is None and (time.time() - model_wait_start) < 10:
+        state["status"] = f"🧠 Inicializando Rede Neural... ({int(time.time() - model_wait_start)}s)"
+        print(f">>> ⏳ Aguardando modelo... ({time.time() - model_wait_start:.1f}s)")
         await asyncio.sleep(0.5)
+    
+    # Se modelo carregou, aguarda 100ms para estabilizar
+    if model is not None:
+        print(f">>> ✅ SNIPER_LOOP: Modelo PRONTO após {time.time() - model_ready_at:.1f}s")
+        await asyncio.sleep(0.1)
+    else:
+        print(f">>> ⚠️ SNIPER_LOOP: Timeout esperando modelo. Continuando em modo puro TA...")
 
+    print(">>> 🐍 SNIPER_LOOP: Iniciando loop de negociação principal...")
     while True:
         try:
             # Obtém o timestamp atual no início de cada iteração
             now_ts = time.time()
+            print(f">>> 🔄 [SNIPER] Iteração começou. last_fetch_ts={last_fetch_ts}, now_ts={now_ts}, delta={(now_ts - last_fetch_ts):.1f}s")
             
-            # 1. BUSCA DE DADOS (A cada 15s para poupar API)
+            # 1. BUSCA DE DADOS (A cada 60s para poupar API)
             if now_ts - last_fetch_ts > 60 or last_fetch_ts == 0:
                 try:
                     print(f">>> 📊 Buscando OHLCV (timeout: 15s)...")
@@ -495,6 +502,7 @@ async def sniper_loop():
 
 
             # 2. LÓGICA DE DECISÃO E PnL (Funciona mesmo sem modelo por enquanto)
+            print(f">>> 🎯 [SNIPER] Verificando df_clean... existe: {'df_clean' in locals()}, tamanho: {len(df_clean) if 'df_clean' in locals() else 0}")
             if 'df_clean' in locals() and len(df_clean) > 0:
                 last_row = df_clean.iloc[-1]
                 current_price = float(last_row['close'])
@@ -664,7 +672,9 @@ async def sniper_loop():
             gc.collect() 
 
             # Sleep limpo e previsível (descansa 1 segundo entre as iterações)
+            print(f">>> 💤 [SNIPER] Dormindo 1s antes da próxima iteração...")
             await asyncio.sleep(1.0)
+            print(f">>> ⏰ [SNIPER] Acordado! Status: {state.get('status', 'desconhecido')}")
             
         except Exception as e:
             print(f"❌ Erro no Loop Sniper: {e}")
@@ -697,6 +707,16 @@ async def lifespan(app: FastAPI):
     
     # ✅ BACKGROUND TASKS - Não bloqueam
     try:
+        # Task de Heartbeat (atualiza estado a cada segundo, independente de sniper_loop)
+        async def heartbeat_task():
+            while True:
+                state["uptime"] = get_uptime()
+                await asyncio.sleep(1.0)
+        
+        print(">>> 📍 Iniciando heartbeat...")
+        task_heartbeat = asyncio.create_task(heartbeat_task())
+        print(">>> ✅ Heartbeat task criado")
+        
         # Inicia loops de trading em paralelo (fire-and-forget)
         print(">>> 📍 Iniciando sniper_loop...")
         task_sniper = asyncio.create_task(sniper_loop())
