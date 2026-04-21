@@ -723,8 +723,8 @@ app.add_middleware(
 async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
     try:
-        # Serialização segura para evitar erros com tipos não-JSON
-        safe_state = json.loads(json.dumps(state, default=str))
+        # Serialização ultrarrápida via Encoder
+        safe_state = json.loads(json.dumps(state, cls=SystemEncoder))
         return safe_state
     except Exception as e:
         print(f">>> ❌ Erro ao retornar state: {e}")
