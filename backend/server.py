@@ -146,13 +146,30 @@ cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a
 # --- FUNÇÕES DE SUPORTE ---
 
 def run_startup_backtest(df_clean, model_instance):
+    """Backtest rápido de inicialização - apenas primeira validação."""
     print(">>> 🔬 EXECUTANDO BACKTEST DE REBOOT...")
+    
+    # ⚡ Se modelo não estiver pronto, retorna valor default
+    if model_instance is None:
+        print(">>> ⚠️ BACKTEST: Modelo None, retornando 50% como padrão")
+        return 50.0
+    
     test_wins, test_losses = 0, 0
     sim_pos, sim_entry = 0, 0.0
     temp_lstm, temp_ep = None, np.ones((1,), dtype=bool)
     
-    test_df = df_clean.tail(300)
+    # ⚡ Reduzido de 300 para 100 velas - backtest mais rápido
+    test_df = df_clean.tail(100)
+    
+    start_bt = time.time()
+    max_bt_time = 3.0  # Max 3 segundos de backtest
+    
     for i in range(len(test_df)):
+        # ⚡ Timeout protetor: se demorar > 3s, aborta
+        if (time.time() - start_bt) > max_bt_time:
+            print(f">>> ⚠️ BACKTEST: Timeout após {time.time() - start_bt:.1f}s. Abortando.")
+            break
+            
         try:
             obs = test_df[feature_cols].iloc[i].values.astype(np.float32)
             action, temp_lstm = model_instance.predict(obs, state=temp_lstm, episode_start=temp_ep, deterministic=True)
@@ -169,10 +186,15 @@ def run_startup_backtest(df_clean, model_instance):
                     else: test_losses += 1
                 if target_pos != 0: sim_entry = test_df.iloc[i]['close']
                 sim_pos = target_pos
-        except: continue
-            
+        except Exception as e:
+            print(f">>> ⚠️ BACKTEST: Erro na iteração {i}: {type(e).__name__}. Continuando...")
+            continue
+    
+    bt_time = time.time() - start_bt        
     tot = test_wins + test_losses
-    return round((test_wins/tot)*100, 1) if tot > 0 else 50.0
+    win_rate = round((test_wins/tot)*100, 1) if tot > 0 else 50.0
+    print(f">>> ✅ BACKTEST: {test_wins}W/{test_losses}L={win_rate}% em {bt_time:.2f}s")
+    return win_rate
 
 def load_brain(path=MODEL_PATH):
     """Carrega modelo de forma síncrona com otimização agressiva de RAM."""
@@ -519,15 +541,24 @@ async def sniper_loop():
 
                 # Estados Iniciais
                 if startup_phase:
+                    # ⚡ CRÍTICO: Skippar backtest se modelo não carregou ainda
+                    if model is None:
+                        state["status"] = "⏳ Aguardando modelo para backtest..."
+                        await asyncio.sleep(0.5)
+                        continue  # Pula para próxima iteração
+                    
                     state["status"] = "Reinício: executando backtest..."
                     startup_timer += 1
                     if startup_timer == 1:
                         # OTIMIZAÇÃO: Roda o backtest pesado em uma thread paralela
+                        print(">>> 🔬 BACKTEST: Rodando com modelo carregado...")
                         res = await asyncio.to_thread(run_startup_backtest, df_clean, model)
+                        print(f">>> ✅ BACKTEST: Completado com win_rate={res}%")
                         state["adaptation"]["initial_win_rate"] = res
                         state["adaptation"]["current_win_rate"] = res
                     if startup_timer > 2: 
                         startup_phase = False
+                        print(">>> ✅ STARTUP: Fase de inicialização concluída!")
                         lstm_states = None # Limpa memória do backtest
 
                 elif warming_up:
