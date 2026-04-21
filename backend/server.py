@@ -722,11 +722,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://iatraderproweb.vercel.app",
-        "http://localhost:3000"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
@@ -737,7 +734,9 @@ async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
     try:
         # Serialização ultrarrápida via Encoder
-        safe_state = json.loads(json.dumps(state, cls=SystemEncoder))
+        state_str = json.dumps(state, cls=SystemEncoder)
+        state_str = state_str.replace(": NaN", ": 0.0").replace(": Infinity", ": 0.0").replace(": -Infinity", ": 0.0")
+        safe_state = json.loads(state_str)
         return safe_state
     except Exception as e:
         print(f">>> ❌ Erro ao retornar state: {e}")

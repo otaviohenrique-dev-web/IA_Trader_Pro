@@ -504,7 +504,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const remainingSeconds = parseInt(data.status.match(/\d+/)?.[0] || 0);
+  const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
 
   return (
     <div className="min-h-screen bg-[#0f172a] p-6 text-slate-100 font-sans">
@@ -574,9 +574,9 @@ export default function Dashboard() {
           
           <div className="mt-auto">
             <div className="text-lg lg:text-xl font-bold uppercase tracking-tighter text-white">
-              {data.status.includes("PROTEÇÃO") ? "Trava de Maturação" : data.status}
+            {data?.status?.includes("PROTEÇÃO") ? "Trava de Maturação" : data?.status}
             </div>
-            {data.status.includes("PROTEÇÃO") && (
+          {data?.status?.includes("PROTEÇÃO") && (
               <div className="mt-3 w-full">
                 <div className="flex justify-between text-xs font-mono text-blue-400 mb-1.5">
                   <span>{remainingSeconds} s restantes</span>
