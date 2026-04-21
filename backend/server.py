@@ -729,6 +729,7 @@ async def get_state_snapshot():
 
 @app.get("/api/historico")
 async def get_historico():
+    temp_ex = None
     try:
         if exchange is None:
             temp_ex = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
@@ -740,7 +741,10 @@ async def get_historico():
         return [{"time": int(r[0]/1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
     except Exception as e:
         print(f"❌ Erro na API Histórico: {e}")
-        raise HTTPException(status_code=500, detail="Erro ao buscar histórico de velas.")
+        if temp_ex:
+            try: await temp_ex.close()
+            except: pass
+        return []
 
 @app.get("/health")
 async def health():
@@ -786,23 +790,25 @@ def sanitize_state(obj):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # 1. Aceita a conexão imediatamente (evita o erro 500 no handshake HTTP)
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except Exception as e:
+        print(f">>> [WS] Erro no handshake: {e}")
+        return
     
     last_sent_state = None
     try:
         while True:
-            # ⚡ OTIMIZAÇÃO: Detecta mudanças antes de serializar (evita 3s de travamento)
-            current_state = copy.deepcopy(state)
+            # ⚡ OTIMIZAÇÃO: Deepcopy e sanitização em uma única passagem
+            safe_state = sanitize_state(copy.deepcopy(state))
             
-            # Só serializa e envia se o estado mudou
-            state_changed = current_state != last_sent_state
+            # Converte para string (mais seguro comparar texto do que igualdade de dict)
+            state_str = json.dumps(safe_state, default=str)
             
-            if state_changed or last_sent_state is None:
-                safe_state = sanitize_state(current_state)
-                safe_state_json = json.loads(json.dumps(safe_state, default=str))
-                await websocket.send_json(safe_state_json)
-                last_sent_state = current_state
+            if state_str != last_sent_state:
+                # Envia o texto JSON puro, evitando parse redudante no backend
+                await websocket.send_text(state_str)
+                last_sent_state = state_str
             
             # Sleep de 500ms (mais responsivo e menos travamento)
             await asyncio.sleep(0.5)
