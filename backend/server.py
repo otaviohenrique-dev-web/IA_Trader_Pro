@@ -771,26 +771,6 @@ async def performance_metrics():
         "message": "Monitoramento de performance desativado para otimização de CPU."
     }
 
-def sanitize_state(obj):
-    """Limpa resquícios do Numpy, NaN e Infinity que quebram o JSON do WebSocket"""
-    if isinstance(obj, dict):
-        return {k: sanitize_state(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [sanitize_state(v) for v in obj]
-    elif isinstance(obj, (np.integer, np.floating)):
-        val = float(obj)
-        # Proteção contra valores absurdamente altos (5000%+ etc)
-        if math.isnan(val) or math.isinf(val): return 0.0
-        if abs(val) > 1_000_000: return 0.0  # Mais de 1 milhão é provavelmente erro
-        return val
-    elif isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj): return 0.0
-        if abs(obj) > 1_000_000: return 0.0
-        return obj
-    elif isinstance(obj, np.ndarray):
-        return sanitize_state(obj.tolist())
-    return obj
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     try:
@@ -802,14 +782,10 @@ async def websocket_endpoint(websocket: WebSocket):
     last_sent_state = None
     try:
         while True:
-            # ⚡ OTIMIZAÇÃO: Deepcopy e sanitização em uma única passagem
-            safe_state = sanitize_state(copy.deepcopy(state))
-            
-            # Converte para string (mais seguro comparar texto do que igualdade de dict)
-            state_str = json.dumps(safe_state, default=str)
+            # ⚡ OTIMIZAÇÃO EXTREMA: Serialização direta nativa sem bloquear thread
+            state_str = json.dumps(state, cls=SystemEncoder)
             
             if state_str != last_sent_state:
-                # Envia o texto JSON puro, evitando parse redudante no backend
                 await websocket.send_text(state_str)
                 last_sent_state = state_str
             
