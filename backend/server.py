@@ -18,7 +18,7 @@ import warnings
 import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
 
@@ -37,6 +37,8 @@ def clean_nans(obj):
         return 0.0 if np.isnan(obj) or np.isinf(obj) else float(obj)
     elif isinstance(obj, np.integer):
         return int(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
     elif isinstance(obj, np.ndarray):
         return clean_nans(obj.tolist())
     return obj
@@ -737,7 +739,8 @@ async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
     try:
         safe_state = clean_nans(state)
-        return safe_state
+        state_str = json.dumps(safe_state)
+        return Response(content=state_str, media_type="application/json")
     except Exception as e:
         print(f">>> ❌ Erro ao retornar state: {e}")
         return {"error": str(e), "status": "offline"}

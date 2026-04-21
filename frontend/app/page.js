@@ -451,7 +451,6 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 // ==========================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
-  const [hydrated, setHydrated] = useState(false);
   const [wsLive, setWsLive] = useState(false);
   const ws = useRef(null);
   const reconnectRef = useRef(null);
@@ -469,16 +468,22 @@ export default function Dashboard() {
                 setData(JSON.parse(text));
                 setWsLive(true);
             } catch (err) {
-                console.error("❌ ERRO JSON PARSE (Backend enviou algo que não é JSON puro):", err, text);
+                setData({ error: "Dados inválidos recebidos da API. O formato quebrou." });
                 setWsLive(false);
             }
         } else {
+            setData({ error: `O servidor recusou a conexão (HTTP ${res.status})` });
             setWsLive(false);
         }
-      } catch (err) { console.error("❌ ERRO DE CONEXÃO FETCH:", err); setWsLive(false); }
+      } catch (err) { 
+        if (!cancelled) {
+            setData({ error: "Falha de rede/CORS. O seu frontend não consegue alcançar o Render: " + err.message });
+            setWsLive(false); 
+        }
+      }
     };
 
-    pullState().finally(() => { if (!cancelled) setHydrated(true); });
+    pullState();
 
     const poll = setInterval(() => {
       if (cancelled) return;
@@ -491,7 +496,7 @@ export default function Dashboard() {
     };
   }, []);
 
-  if (!data && !hydrated) return (
+  if (!data) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
       <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
       <p className="animate-pulse">Sincronizando com o núcleo...</p>
@@ -503,7 +508,7 @@ export default function Dashboard() {
       <ShieldAlert className="mb-4 text-amber-500" size={48} />
       <p className="text-lg font-bold text-white mb-2">Servidor não respondeu</p>
       <p className="text-sm text-slate-400 mb-4">
-        O painel precisa da API Python. Configure no Render (ou no <code className="text-cyan-400">.env.local</code>) as variáveis <code className="text-cyan-400">NEXT_PUBLIC_WS_URL</code> e/ou <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> apontando para o mesmo serviço do backend.
+        O painel não conseguiu alcançar a API Python. Verifique se a variável <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> no seu painel da Vercel está configurada corretamente para o Render.
       </p>
       <p className="text-xs text-slate-500 font-mono break-all">Endereço tentado: {backendHttpBase()}</p>
       {data?.error && <p className="text-xs text-red-400 mt-4 border border-red-500/30 bg-red-500/10 p-2 rounded">Erro no Backend: {data.error}</p>}
