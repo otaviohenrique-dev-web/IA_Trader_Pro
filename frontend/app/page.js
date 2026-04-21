@@ -501,8 +501,7 @@ export default function Dashboard() {
       s.onclose = (event) => {
         if (cancelled) return;
         setWsLive(false);
-        console.log(`🔌 Conexão WS fechada (Código: ${event.code}). Reconectando em 3s...`);
-        pullState(); // Mantém a tela viva via HTTP enquanto o WS não volta
+        console.log(`🔌 Conexão WS em espera. Retentando em 3s...`);
         reconnectRef.current = setTimeout(connect, 3000);
       };
     };

@@ -38,6 +38,7 @@ uvicorn.run(
     timeout_keep_alive=75,
     access_log=True,
     loop="auto",
+    ws="websockets",
     proxy_headers=True,
     forwarded_allow_ips="*",
 )
