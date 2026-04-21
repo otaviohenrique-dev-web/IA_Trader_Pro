@@ -546,16 +546,7 @@ export default function Dashboard() {
     );
   }
 
-  // ✅ Se chegou aqui, data está OK
-  if (!data.asset) {
-    return (
-      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
-        <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
-        <p className="animate-pulse">Inicializando sistema...</p>
-      </div>
-    );
-  }
-
+  // ✅ Se chegou aqui, data está OK - renderiza mesmo em startup
   const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
 
   return (
