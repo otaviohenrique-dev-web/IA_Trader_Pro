@@ -19,7 +19,7 @@ import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Header
 from fastapi.responses import FileResponse, Response
-from fastapi.middleware.gzip import GZIPMiddleware
+from starlette.middleware.gzip import GZIPMiddleware
 from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
 
