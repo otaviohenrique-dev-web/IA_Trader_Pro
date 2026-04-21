@@ -25,6 +25,19 @@ warnings.filterwarnings("ignore")
 # Trava o PyTorch para não estrangular a CPU do Render
 torch.set_num_threads(1)
 
+# --- OTIMIZADOR DE JSON (Evita travar a CPU e a RAM) ---
+class SystemEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer): return int(obj)
+        if isinstance(obj, np.floating):
+            val = float(obj)
+            if math.isnan(val) or math.isinf(val): return 0.0
+            return val
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj): return 0.0
+        return str(obj)
+
 # --- CONFIGURAÇÕES DO SISTEMA ---
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m' 

@@ -528,7 +528,7 @@ export default function Dashboard() {
     </div>
   );
 
-  if (!data) return (
+  if (!data || data.error) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono px-6 text-center max-w-lg">
       <ShieldAlert className="mb-4 text-amber-500" size={48} />
       <p className="text-lg font-bold text-white mb-2">Servidor não respondeu</p>
@@ -536,7 +536,7 @@ export default function Dashboard() {
         O painel precisa da API Python. Configure no Render (ou no <code className="text-cyan-400">.env.local</code>) as variáveis <code className="text-cyan-400">NEXT_PUBLIC_WS_URL</code> e/ou <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> apontando para o mesmo serviço do backend.
       </p>
       <p className="text-xs text-slate-500 font-mono break-all">Endereço tentado: {backendHttpBase()}</p>
-      <p className="text-xs text-slate-500 mt-2">Em desenvolvimento, na pasta <code className="text-slate-300">backend</code>, execute <code className="text-slate-300">python server.py</code> (porta padrão 10000).</p>
+      {data?.error && <p className="text-xs text-red-400 mt-4 border border-red-500/30 bg-red-500/10 p-2 rounded">Erro no Backend: {data.error}</p>}
     </div>
   );
 
