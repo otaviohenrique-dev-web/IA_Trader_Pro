@@ -518,26 +518,43 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(poll);
     };
-  }, [previousState]);
+  }, []); // ⚡ Dependência vazia - roda apenas 1x na montagem
 
-  if (!data) return (
-    <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
-      <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
-      <p className="animate-pulse">Sincronizando com o núcleo...</p>
-    </div>
-  );
+  if (!data) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
+        <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
+        <p className="animate-pulse">Conectando à API... (1ª tentativa)</p>
+      </div>
+    );
+  }
 
-  if (!data || data.error) return (
-    <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono px-6 text-center max-w-lg">
-      <ShieldAlert className="mb-4 text-amber-500" size={48} />
-      <p className="text-lg font-bold text-white mb-2">Servidor não respondeu</p>
-      <p className="text-sm text-slate-400 mb-4">
-        O painel não conseguiu alcançar a API Python. Verifique se a variável <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> no seu painel da Vercel está configurada corretamente para o Render.
-      </p>
-      <p className="text-xs text-slate-500 font-mono break-all">Endereço tentado: {backendHttpBase()}</p>
-      {data?.error && <p className="text-xs text-red-400 mt-4 border border-red-500/30 bg-red-500/10 p-2 rounded">Erro no Backend: {data.error}</p>}
-    </div>
-  );
+  if (data.error) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono px-6 text-center max-w-lg">
+        <ShieldAlert className="mb-4 text-amber-500" size={48} />
+        <p className="text-lg font-bold text-white mb-2">Servidor não respondeu</p>
+        <p className="text-sm text-slate-400 mb-4">
+          O painel não conseguiu alcançar a API Python. Verifique se a variável <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> no seu painel da Vercel está configurada corretamente para o Render.
+        </p>
+        <p className="text-xs text-slate-500 font-mono break-all">Endereço tentado: {backendHttpBase()}</p>
+        <p className="text-xs text-red-400 mt-4 border border-red-500/30 bg-red-500/10 p-2 rounded">
+          Erro: {data.error}
+        </p>
+        <p className="text-xs text-slate-400 mt-4">Tentando novamente em 5 segundos...</p>
+      </div>
+    );
+  }
+
+  // ✅ Se chegou aqui, data está OK
+  if (!data.asset) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
+        <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
+        <p className="animate-pulse">Inicializando sistema...</p>
+      </div>
+    );
+  }
 
   const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
 
