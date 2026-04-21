@@ -19,7 +19,6 @@ import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Header
 from fastapi.responses import FileResponse, Response
-from starlette.middleware.gzip import GZIPMiddleware
 from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
 
@@ -730,19 +729,7 @@ async def lifespan(app: FastAPI):
     print(">>> 🛑 Encerrando lifespan...")
 
 
-@app.get("/ready")
-async def readiness_probe():
-    """Healthcheck de READINESS para Render - retorna 200 quando sistema está pronto."""
-    if model is None:
-        return {"ready": False, "status": "Modelo carregando...", "code": 503}
-    return {"ready": True, "status": "Sistema pronto", "code": 200}
-
-
-
 app = FastAPI(lifespan=lifespan)
-
-# ✅ Middleware GZIP (Compressão de Resposta)
-app.add_middleware(GZIPMiddleware, minimum_size=500)
 
 # ✅ Middleware CORS Padrão (Sem conflitos com WebSockets)
 from fastapi.middleware.cors import CORSMiddleware
@@ -755,6 +742,13 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]
 )
+
+@app.get("/ready")
+async def readiness_probe():
+    """Healthcheck de READINESS para Render - retorna 200 quando sistema está pronto."""
+    if model is None:
+        return {"ready": False, "status": "Modelo carregando...", "code": 503}
+    return {"ready": True, "status": "Sistema pronto", "code": 200}
 
 @app.get("/api/state")
 async def get_state_snapshot():
