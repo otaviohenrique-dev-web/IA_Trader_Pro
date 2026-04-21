@@ -750,6 +750,25 @@ async def readiness_probe():
         return {"ready": False, "status": "Modelo carregando...", "code": 503}
     return {"ready": True, "status": "Sistema pronto", "code": 200}
 
+@app.get("/ping")
+async def ping():
+    """Ping simples de teste."""
+    return {"ping": "pong", "timestamp": time.time(), "status": "ok"}
+
+@app.get("/test-json")
+async def test_json():
+    """Endpoint de teste para verificar se JSON está sendo serializado corretamente."""
+    try:
+        safe_state = clean_nans(state)
+        if safe_state.get("markers"):
+            safe_state["markers"] = safe_state["markers"][-5:]
+        if safe_state.get("order_book"):
+            safe_state["order_book"] = safe_state["order_book"][:5]
+        state_str = json.dumps(safe_state)
+        return Response(content=state_str, media_type="application/json")
+    except Exception as e:
+        return {"error": str(e), "status": "error", "type": type(e).__name__}
+
 @app.get("/api/state")
 async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
@@ -761,11 +780,20 @@ async def get_state_snapshot():
         # ⚡ OTIMIZAÇÃO: Limita order_book a apenas 30 últimos
         if safe_state.get("order_book") and len(safe_state["order_book"]) > 30:
             safe_state["order_book"] = safe_state["order_book"][:30]
+        
         state_str = json.dumps(safe_state)
+        print(f">>> 📡 GET /api/state -> {len(state_str)} bytes enviados")
         return Response(content=state_str, media_type="application/json")
     except Exception as e:
-        print(f">>> ❌ Erro ao retornar state: {e}")
-        return {"error": str(e), "status": "offline"}
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        print(f">>> ❌ Erro ao retornar state: {error_msg}")
+        traceback.print_exc()
+        return Response(
+            content=json.dumps({"error": error_msg, "status": "offline"}),
+            media_type="application/json",
+            status_code=500
+        )
 
 @app.get("/api/historico")
 async def get_historico():

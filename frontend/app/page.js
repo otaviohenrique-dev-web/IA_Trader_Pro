@@ -463,27 +463,45 @@ export default function Dashboard() {
     const pullState = async () => {
       try {
         const res = await fetch(`${httpBase}/api/state`);
+        
+        // Debug logging
+        console.log(`[API] GET /api/state -> Status: ${res.status}, OK: ${res.ok}`);
+        
         if (res.ok && !cancelled) {
             const text = await res.text();
+            console.log(`[API] Response length: ${text.length} bytes`);
+            
+            if (!text) {
+                setData({ error: "⚠️ API retornou resposta vazia (0 bytes)" });
+                setWsLive(false);
+                return;
+            }
+            
             try {
                 const newState = JSON.parse(text);
+                console.log(`[API] JSON parsed OK. Keys: ${Object.keys(newState).join(", ")}`);
+                
                 // Delta update: só atualiza se mudou
                 if (!previousState || JSON.stringify(previousState) !== JSON.stringify(newState)) {
                     setData(newState);
                     setPreviousState(newState);
                 }
                 setWsLive(true);
-            } catch (err) {
-                setData({ error: "Dados inválidos recebidos da API. O formato quebrou." });
+            } catch (jsonErr) {
+                console.error(`[API] JSON Parse Error:`, jsonErr);
+                setData({ error: `❌ Resposta inválida da API (JSON quebrado): ${jsonErr.message}` });
                 setWsLive(false);
             }
         } else {
-            setData({ error: `O servidor recusou a conexão (HTTP ${res.status})` });
+            const bodyPreview = await res.text().catch(() => "[não legível]");
+            console.error(`[API] Error Response:`, { status: res.status, body: bodyPreview.substring(0, 200) });
+            setData({ error: `❌ Servidor retornou HTTP ${res.status}. Pode estar iniciando ou offline.` });
             setWsLive(false);
         }
       } catch (err) { 
         if (!cancelled) {
-            setData({ error: "Falha de rede/CORS. O seu frontend não consegue alcançar o Render: " + err.message });
+            console.error(`[API] Network/CORS Error:`, err);
+            setData({ error: `❌ Erro de rede/CORS: ${err.message}` });
             setWsLive(false); 
         }
       }
