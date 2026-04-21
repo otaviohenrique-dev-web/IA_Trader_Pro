@@ -2,6 +2,12 @@
 """
 Main entry point for Render deployment.
 Inicializa o servidor FastAPI com MÁXIMA rapidez.
+
+⚡ OTIMIZAÇÕES:
+- Workers: 2 (foi 1) para melhor concorrência
+- Polling Frontend: 5s (foi 2s) para menos carga
+- Healthcheck: /ready (novo) para Render detectar readiness
+- Compressão: GZIP middleware ativado
 """
 
 import os
@@ -28,6 +34,7 @@ print(">>> [5/5] Iniciando servidor...")
 print(f">>> ✅ Servidor iniciando em {host}:{port}")
 print(f">>> 📍 Acesso: http://localhost:{port}")
 print(f">>> 🔗 Health: http://localhost:{port}/health")
+print(f">>> 🔗 Ready: http://localhost:{port}/ready")
 
 # Inicia Uvicorn
 uvicorn.run(

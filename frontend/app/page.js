@@ -452,6 +452,7 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [wsLive, setWsLive] = useState(false);
+  const [previousState, setPreviousState] = useState(null);
   const ws = useRef(null);
   const reconnectRef = useRef(null);
 
@@ -465,7 +466,12 @@ export default function Dashboard() {
         if (res.ok && !cancelled) {
             const text = await res.text();
             try {
-                setData(JSON.parse(text));
+                const newState = JSON.parse(text);
+                // Delta update: só atualiza se mudou
+                if (!previousState || JSON.stringify(previousState) !== JSON.stringify(newState)) {
+                    setData(newState);
+                    setPreviousState(newState);
+                }
                 setWsLive(true);
             } catch (err) {
                 setData({ error: "Dados inválidos recebidos da API. O formato quebrou." });
@@ -488,13 +494,13 @@ export default function Dashboard() {
     const poll = setInterval(() => {
       if (cancelled) return;
       pullState();
-    }, 2000); // Faz a busca silenciosa e rápida a cada 2 segundos
+    }, 5000); // ⚡ Reduzido de 2000ms para 5000ms (melhor performance)
 
     return () => {
       cancelled = true;
       clearInterval(poll);
     };
-  }, []);
+  }, [previousState]);
 
   if (!data) return (
     <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">

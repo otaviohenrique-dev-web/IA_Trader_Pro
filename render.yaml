@@ -13,9 +13,10 @@ services:
     # Start - rapidíssimo
     startCommand: python main.py
     
-    # Health check automático
-    healthCheckPath: /
-    healthCheckTimeout: 30
+    # Health check automático - READINESS endpoint
+    healthCheckPath: /ready
+    healthCheckTimeout: 10
+    healthCheckInterval: 30
     
     # Recursos
     plan: starter
@@ -26,6 +27,8 @@ services:
         value: "true"
       - key: PORT
         value: "10000"
+      - key: WEB_CONCURRENCY
+        value: "2"
       - key: GEMINI_API_KEY
         sync: false
       - key: CRYPTOCOMPARE_API_KEY

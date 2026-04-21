@@ -19,6 +19,7 @@ import aiohttp
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Header
 from fastapi.responses import FileResponse, Response
+from fastapi.middleware.gzip import GZIPMiddleware
 from starlette.websockets import WebSocketState
 warnings.filterwarnings("ignore")
 
@@ -416,10 +417,16 @@ async def sniper_loop():
     consecutive_signals = 0
     last_signal = 0
 
-   # 🚀 CORREÇÃO: Pausa o loop até que o modelo da IA esteja totalmente carregado
-    while model is None:
+    # 🚀 OTIMIZAÇÃO: Começa a processar MESMO sem o modelo (estado aguardando)
+    model_ready_at = time.time()
+    while True:
+        if model is not None:
+            if time.time() - model_ready_at < 1.0:
+                print(f">>> ✅ SNIPER_LOOP: Modelo PRONTO! Iniciando operação em 1s...")
+                await asyncio.sleep(1)
+            break
         state["status"] = "🧠 Inicializando Rede Neural..."
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
     while True:
         try:
@@ -488,8 +495,8 @@ async def sniper_loop():
                     continue
 
 
-            # 2. LÓGICA DE DECISÃO E PnL
-            if model and 'df_clean' in locals() and len(df_clean) > 0:
+            # 2. LÓGICA DE DECISÃO E PnL (Funciona mesmo sem modelo por enquanto)
+            if 'df_clean' in locals() and len(df_clean) > 0:
                 last_row = df_clean.iloc[-1]
                 current_price = float(last_row['close'])
                 target_pos = position 
@@ -525,23 +532,27 @@ async def sniper_loop():
 
                 else:
                     # IA PREDIÇÃO (com timeout protetor)
-                    # IA PREDIÇÃO (Execução direta, sem criar threads zumbis)
-                    try:
-                        obs = last_row[feature_cols].values.astype(np.float32)
-                        
-                        action, lstm_states = model.predict(
-                            obs, 
-                            state=lstm_states, 
-                            episode_start=episode_starts, 
-                            deterministic=True
-                        )
-                        
-                        episode_starts = np.zeros((1,), dtype=bool)
-                        act_idx = action.item()
-                    except Exception as e:
-                        print(f">>> [SNIPER] ❌ Erro na predição IA: {type(e).__name__}")
+                    # IA PREDIÇÃO (Só se modelo já carregou)
+                    if model is not None:
+                        try:
+                            obs = last_row[feature_cols].values.astype(np.float32)
+                            
+                            action, lstm_states = model.predict(
+                                obs, 
+                                state=lstm_states, 
+                                episode_start=episode_starts, 
+                                deterministic=True
+                            )
+                            
+                            episode_starts = np.zeros((1,), dtype=bool)
+                            act_idx = action.item()
+                        except Exception as e:
+                            print(f">>> [SNIPER] ❌ Erro na predição IA: {type(e).__name__}")
+                            act_idx = 0
+                            episode_starts = np.ones((1,), dtype=bool)
+                    else:
                         act_idx = 0
-                        episode_starts = np.ones((1,), dtype=bool) # Reset LSTM em caso de falha
+                        state["status"] = "⏳ MODELO CARREGANDO... (aguardando)"
 
                     # Validação de Sinais
                     if act_idx != 0 and act_idx == last_signal: consecutive_signals += 1
@@ -719,8 +730,19 @@ async def lifespan(app: FastAPI):
     print(">>> 🛑 Encerrando lifespan...")
 
 
+@app.get("/ready")
+async def readiness_probe():
+    """Healthcheck de READINESS para Render - retorna 200 quando sistema está pronto."""
+    if model is None:
+        return {"ready": False, "status": "Modelo carregando...", "code": 503}
+    return {"ready": True, "status": "Sistema pronto", "code": 200}
+
+
 
 app = FastAPI(lifespan=lifespan)
+
+# ✅ Middleware GZIP (Compressão de Resposta)
+app.add_middleware(GZIPMiddleware, minimum_size=500)
 
 # ✅ Middleware CORS Padrão (Sem conflitos com WebSockets)
 from fastapi.middleware.cors import CORSMiddleware
@@ -739,6 +761,12 @@ async def get_state_snapshot():
     """Snapshot HTTP do estado ao vivo (o dashboard usa WebSocket; isto evita tela eterna de load se o WS falhar)."""
     try:
         safe_state = clean_nans(state)
+        # ⚡ OTIMIZAÇÃO: Limita markers a apenas 50 últimos (evita payload gigante)
+        if safe_state.get("markers") and len(safe_state["markers"]) > 50:
+            safe_state["markers"] = safe_state["markers"][-50:]
+        # ⚡ OTIMIZAÇÃO: Limita order_book a apenas 30 últimos
+        if safe_state.get("order_book") and len(safe_state["order_book"]) > 30:
+            safe_state["order_book"] = safe_state["order_book"][:30]
         state_str = json.dumps(safe_state)
         return Response(content=state_str, media_type="application/json")
     except Exception as e:
