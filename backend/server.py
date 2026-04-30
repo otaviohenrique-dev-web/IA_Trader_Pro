@@ -115,19 +115,26 @@ feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_widt
 last_analysis_time = 0
 cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando..."}
 
-global_safe_state_str = "{}"
+# Inicialização de segurança para o WebSocket
+global_safe_state_str = '{"status": "Aguardando sincronização neural..."}'
+connected_clients = []
 
 def update_safe_state():
+    """Sanitiza e empacota o estado APENAS quando ele sofre alterações."""
     global global_safe_state_str
     try:
-        safe_state = clean_nans(state)
+        # Cria uma cópia profunda para evitar mutação durante a sanitização
+        safe_state = clean_nans(copy.deepcopy(state))
+        
+        # Otimizações de memória aplicadas na raiz
         if safe_state.get("markers") and len(safe_state["markers"]) > 50:
             safe_state["markers"] = safe_state["markers"][-50:]
         if safe_state.get("order_book") and len(safe_state["order_book"]) > 30:
             safe_state["order_book"] = safe_state["order_book"][:30]
+        
         global_safe_state_str = json.dumps(safe_state)
-    except:
-        pass
+    except Exception as e:
+        print(f">>> ❌ Erro ao sanitizar estado: {e}")
 
 def run_startup_backtest(df_clean, model_instance):
     if model_instance is None: return 50.0
@@ -355,15 +362,38 @@ async def get_state_snapshot():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    last_sent = None
+    # Registra o cliente na lista global de conexões
+    if 'connected_clients' not in globals():
+        global connected_clients
+        connected_clients = []
+    
+    connected_clients.append(websocket)
+    
     try:
         while True:
-            curr = global_safe_state_str
-            if curr != last_sent:
-                await websocket.send_text(curr)
-                last_sent = curr
-            await asyncio.sleep(0.5)
-    except: pass
+            # Tenta pegar a string global sanitizada (Blindagem 2)
+            try:
+                data_to_send = global_safe_state_str
+            except NameError:
+                # Caso a variável ainda não tenha sido definida em tempo de execução
+                data_to_send = '{"status": "Carregando motor IA..."}'
+            
+            # Envia o estado (seja o real ou o fallback)
+            await websocket.send_text(data_to_send)
+            
+            # Mantém o pulso de 1 segundo para sincronia perfeita com o Uptime
+            await asyncio.sleep(1)
+            
+    except WebSocketDisconnect:
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
+    except Exception as e:
+        print(f">>> ❌ Erro Crítico no WS: {e}")
+        # Tenta avisar o cliente antes de fechar (opcional)
+        try:
+            await websocket.send_text('{"status": "Erro de conexão interna"}')
+        except:
+            pass
 
 @app.get("/api/historico")
 async def get_historico():
