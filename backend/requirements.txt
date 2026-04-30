@@ -13,4 +13,4 @@ stable-baselines3
 sb3-contrib
 gymnasium
 torch --index-url https://download.pytorch.org/whl/cpu
-pandas-ta-classic
+pandas-ta-classic 

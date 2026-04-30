@@ -128,15 +128,14 @@ function DojoPanel({ state }) {
     setMensagem('⏳ Gerando arquivo...');
     
     try {
-      // Faz o request enviando a senha de forma invisível no Header
-      const res = await fetch(`${API_URL}/download-dados`, {
+      // ✅ Prefixo /api/ adicionado corretamente
+      const res = await fetch(`${API_URL}/api/download-dados`, {
         method: 'GET',
         headers: { 'x-admin-password': senha }
       });
       
       if (!res.ok) throw new Error('Senha incorreta ou arquivo inexistente.');
       
-      // Cria um link temporário na memória para forçar o download
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -162,8 +161,8 @@ function DojoPanel({ state }) {
     formData.append('file', file);
     
     try {
-      // Remove o ?senha= e passa para o Header
-      const res = await fetch(`${API_URL}/upload-cerebro`, { 
+      // ✅ Prefixo /api/ adicionado corretamente
+      const res = await fetch(`${API_URL}/api/upload-cerebro`, { 
         method: 'POST', 
         headers: { 'x-admin-password': senha },
         body: formData 
@@ -318,7 +317,6 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 
     let requestAnimationFrameId = null;
     chart.subscribeCrosshairMove((param) => {
-      // (Mantivemos sua lógica impecável de Tooltip aqui, reduzida visualmente para focar no novo recurso)
       if (requestAnimationFrameId) cancelAnimationFrame(requestAnimationFrameId);
       requestAnimationFrameId = requestAnimationFrame(() => {
         const tooltip = tooltipRef.current;
@@ -452,73 +450,113 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [wsLive, setWsLive] = useState(false);
-  const [previousState, setPreviousState] = useState(null);
   const ws = useRef(null);
   const reconnectRef = useRef(null);
 
   useEffect(() => {
     const httpBase = backendHttpBase();
+    const wsUrl = backendWsUrl();
     let cancelled = false;
+    let wsConnected = false;
 
+    // --- 1. FALLBACK HTTP SILENCIOSO ---
     const pullState = async () => {
+      // Otimização de Performance: Se o WebSocket está operante, abortamos a chamada HTTP
+      if (wsConnected) return; 
+      
       try {
+        // Rota state já está usando o /api/ de forma correta.
         const res = await fetch(`${httpBase}/api/state`);
-        
-        // Debug logging
-        console.log(`[API] GET /api/state -> Status: ${res.status}, OK: ${res.ok}`);
-        
         if (res.ok && !cancelled) {
             const text = await res.text();
-            console.log(`[API] Response length: ${text.length} bytes`);
-            
             if (!text) {
                 setData({ error: "⚠️ API retornou resposta vazia (0 bytes)" });
                 setWsLive(false);
                 return;
             }
-            
             try {
                 const newState = JSON.parse(text);
-                console.log(`[API] JSON parsed OK. Keys: ${Object.keys(newState).join(", ")}`);
-                
-                // Delta update: só atualiza se mudou
-                if (!previousState || JSON.stringify(previousState) !== JSON.stringify(newState)) {
-                    setData(newState);
-                    setPreviousState(newState);
-                }
-                setWsLive(true);
+                setData(prev => {
+                    // Atualiza apenas se houve mudança real (Delta Check)
+                    if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState;
+                    return prev;
+                });
             } catch (jsonErr) {
-                console.error(`[API] JSON Parse Error:`, jsonErr);
                 setData({ error: `❌ Resposta inválida da API (JSON quebrado): ${jsonErr.message}` });
                 setWsLive(false);
             }
-        } else {
-            const bodyPreview = await res.text().catch(() => "[não legível]");
-            console.error(`[API] Error Response:`, { status: res.status, body: bodyPreview.substring(0, 200) });
+        } else if (!cancelled) {
             setData({ error: `❌ Servidor retornou HTTP ${res.status}. Pode estar iniciando ou offline.` });
             setWsLive(false);
         }
       } catch (err) { 
         if (!cancelled) {
-            console.error(`[API] Network/CORS Error:`, err);
             setData({ error: `❌ Erro de rede/CORS: ${err.message}` });
             setWsLive(false); 
         }
       }
     };
 
-    pullState();
+    // --- 2. RESTAURAÇÃO DO ELO PERDIDO (WEBSOCKET) ---
+    const connectWS = () => {
+      if (cancelled) return;
+      try {
+        ws.current = new WebSocket(wsUrl);
 
+        ws.current.onopen = () => {
+          if (cancelled) return;
+          wsConnected = true;
+          setWsLive(true);
+        };
+
+        ws.current.onmessage = (event) => {
+          if (cancelled) return;
+          try {
+            const newState = JSON.parse(event.data);
+            setData(prev => {
+                if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState;
+                return prev;
+            });
+          } catch (err) {
+            console.error("[WS] Parse error:", err);
+          }
+        };
+
+        ws.current.onclose = () => {
+          if (cancelled) return;
+          wsConnected = false;
+          setWsLive(false);
+          // Tenta reconectar automaticamente em 3 segundos
+          reconnectRef.current = setTimeout(connectWS, 3000);
+        };
+
+        ws.current.onerror = () => {
+          // Fechamos a conexão no onerror para forçar o onclose e o ciclo de reconexão
+          if (ws.current) ws.current.close();
+        };
+      } catch (err) {
+        console.error("[WS] Falha crítica na inicialização:", err);
+      }
+    };
+
+    // --- INICIALIZAÇÃO DO MOTOR HÍBRIDO ---
+    pullState(); // 1ª Carga Rápida (HTTP) para não deixar a tela vazia
+    connectWS(); // Engata o tempo real instantaneamente
+
+    // Ciclo de Segurança: 5 segundos
     const poll = setInterval(() => {
       if (cancelled) return;
-      pullState();
-    }, 5000); // ⚡ Reduzido de 2000ms para 5000ms (melhor performance)
+      pullState(); // Só fará o fetch de fato se a variável wsConnected for falsa
+    }, 5000); 
 
+    // Cleanup Component Unmount
     return () => {
       cancelled = true;
       clearInterval(poll);
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      if (ws.current) ws.current.close();
     };
-  }, []); // ⚡ Dependência vazia - roda apenas 1x na montagem
+  }, []);
 
   if (!data) {
     return (
@@ -546,7 +584,7 @@ export default function Dashboard() {
     );
   }
 
-  // ✅ Se chegou aqui, data está OK - renderiza mesmo em startup
+  // ✅ Se chegou aqui, data está OK
   const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
 
   return (
@@ -559,11 +597,11 @@ export default function Dashboard() {
         <div className="flex flex-col items-end gap-1">
           {!wsLive && (
             <span className="text-[10px] font-mono text-amber-400 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded">
-              Aguardando conexão com API...
+              Aguardando conexão em tempo real... (HTTP Fallback)
             </span>
           )}
           {wsLive && (
-            <span className="text-[10px] font-mono text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded">
+            <span className="text-[10px] font-mono text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded animate-pulse">
               Sincronizado (Tempo Real)
             </span>
           )}
@@ -655,12 +693,12 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg">
           <TradingChart 
-  liveCandle={data.last_candle} 
-  markersData={data.markers} 
-  inPosition={data.in_position} 
-  entryPrice={data.entry_price} 
-  currentPosition={data.current_position} 
-/>
+            liveCandle={data.last_candle} 
+            markersData={data.markers} 
+            inPosition={data.in_position} 
+            entryPrice={data.entry_price} 
+            currentPosition={data.current_position} 
+          />
         </div>
         <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-[482px] flex flex-col shadow-lg custom-scrollbar">
           <h2 className="text-xs font-black mb-4 flex items-center gap-2 border-b border-slate-700 pb-2 uppercase tracking-widest shrink-0">
