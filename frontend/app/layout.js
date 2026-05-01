@@ -1,5 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css"; // 🚀 O CSS ESTÁ DE VOLTA!
+import "./globals.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -11,15 +11,14 @@ const geistMono = Geist_Mono({
   subsets: ["latin", "latin-ext"],
 });
 
-// AÇÃO: Atualização de Metadados + Open Graph (WhatsApp)
 export const metadata = {
-  // Resolve o aviso do Next.js. Se não houver variável de ambiente, usa o localhost.
-  // IMPORTANTE: Na Vercel, configure a variável NEXT_PUBLIC_SITE_URL com o seu domínio final.
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
+  // A URL base que o Next.js usará para montar os links das imagens
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://iatraderpro-nine.vercel.app"),
   
   title: "Sniper Engine v3.0 • Neural ONNX Terminal [BTC/USDT]",
   description: "Advanced Algorithmic Execution System | Gemini Market Sentinel.",
   
+  // Efeito Card WhatsApp / LinkedIn / Facebook
   openGraph: {
     title: "IA Trader Pro v3.0 | Sniper Neural Online 🚀",
     description: "Monitoramento em tempo real via ONNX Runtime e Sentinela de Notícias Gemini. Clique para ver a IA em ação no par BTC/USDT.",
@@ -27,7 +26,7 @@ export const metadata = {
     siteName: 'IA Trader Pro',
     images: [
       {
-        url: '/og-image.png', // A imagem de 10KB que geramos
+        url: '/og-image.png',
         width: 1200,
         height: 630,
         alt: 'Dashboard IA Trader Pro',
@@ -35,6 +34,14 @@ export const metadata = {
     ],
     locale: 'pt_BR',
     type: 'website',
+  },
+
+  // Efeito Card Twitter / X / Discord / Telegram
+  twitter: {
+    card: 'summary_large_image',
+    title: "IA Trader Pro v3.0 | Sniper Neural Online 🚀",
+    description: "Monitoramento em tempo real via ONNX Runtime e Sentinela de Notícias Gemini.",
+    images: ['/og-image.png'],
   },
 
   icons: {
