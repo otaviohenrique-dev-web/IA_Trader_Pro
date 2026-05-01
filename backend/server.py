@@ -353,12 +353,25 @@ async def sniper_loop():
     consecutive_signals = 0
     last_signal = 0
 
-    model_wait_start = time.time()
-    while model is None and (time.time() - model_wait_start) < 10:
-        state["status"] = f"🧠 Inicializando Rede Neural... ({int(time.time() - model_wait_start)}s)"
-        await asyncio.sleep(0.5)
+    # 🚀 1. TEMPO DE RESPIRO (Para o Render estabilizar o WebSocket)
+    print(">>> ⏳ [Sniper] Estabilizando rotas de rede (15s)...")
+    state["status"] = "Estabilizando rotas de rede..."
+    await asyncio.sleep(15)
     
-    if model is not None: await asyncio.sleep(0.1)
+    # 🚀 2. CARREGAMENTO ATIVO E ATRASADO (Lazy Load)
+    print(">>> 🧠 [Sniper] Iniciando carregamento da Rede Neural...")
+    state["status"] = "🧠 Carregando Rede Neural pesada..."
+    if os.path.exists(MODEL_PATH):
+        await asyncio.to_thread(load_brain, MODEL_PATH)
+    else:
+        print(f">>> ⚠️ [Sniper] Modelo não encontrado em {MODEL_PATH}")
+
+    # 3. VERIFICAÇÃO FINAL (Substitui o antigo while loop de espera)
+    if model is not None: 
+        print(">>> ✅ [Sniper] Modelo PRONTO.")
+        await asyncio.sleep(0.1)
+    else:
+        print(">>> ⚠️ [Sniper] Sem modelo. Continuando em modo puro TA...")
 
     loop_counter = 0 
     
@@ -562,8 +575,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(sniper_loop())
         asyncio.create_task(analyst_market_loop())
         
-        if os.path.exists(MODEL_PATH):
-            asyncio.create_task(asyncio.to_thread(load_brain, MODEL_PATH))
+        # 🚀 AÇÃO EXECUTADA: Carregamento do modelo removido do lifespan
+        # Deixamos o Uvicorn subir imediatamente!
+        
     except Exception as e:
         print(f">>> ❌ Erro no startup: {e}")
     yield
