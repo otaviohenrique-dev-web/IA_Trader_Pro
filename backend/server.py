@@ -437,26 +437,15 @@ async def get_state_snapshot():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    # Registra o cliente na lista global de conexões
-    if 'connected_clients' not in globals():
-        global connected_clients
-        connected_clients = []
     
+    # Gerencia a lista global de clientes sem condicionais perigosas
+    global connected_clients
     connected_clients.append(websocket)
     
     try:
         while True:
-            # Tenta pegar a string global sanitizada (Blindagem 2)
-            try:
-                data_to_send = global_safe_state_str
-            except NameError:
-                # Caso a variável ainda não tenha sido definida em tempo de execução
-                data_to_send = '{"status": "Carregando motor IA..."}'
-            
-            # Envia o estado (seja o real ou o fallback)
-            await websocket.send_text(data_to_send)
-            
-            # Mantém o pulso de 1 segundo para sincronia perfeita com o Uptime
+            # Envia a string global que já está sendo atualizada no loop principal
+            await websocket.send_text(global_safe_state_str)
             await asyncio.sleep(1)
             
     except WebSocketDisconnect:
@@ -464,11 +453,6 @@ async def websocket_endpoint(websocket: WebSocket):
             connected_clients.remove(websocket)
     except Exception as e:
         print(f">>> ❌ Erro Crítico no WS: {e}")
-        # Tenta avisar o cliente antes de fechar (opcional)
-        try:
-            await websocket.send_text('{"status": "Erro de conexão interna"}')
-        except:
-            pass
 
 @app.get("/api/historico")
 async def get_historico():
