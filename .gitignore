@@ -56,14 +56,16 @@ mercado_real_*.csv
 *.log
 backend/**/*.log
 
-# ━━ 6. MODELOS DE IA E WEIGHTS (Injetados via Dojo) ━━━━━━━━━━━━━
+# ━━ 6. MODELOS DE IA E WEIGHTS (Injetados via Dashboard Vercel) ━━━━━━━━━━━━━
 backend/tensorboard_logs/
 tensorboard_logs/
-backend/models/**/*.zip
-backend/models/**/*.pth
-backend/models/**/*.h5
-backend/models/**/*.pt
-backend/models/**/*.onnx
+backend/models
+backend/models/*.zip
+backend/models/*.pth
+backend/models/*.h5
+backend/models/*.pt
+backend/models/*.onnx
+backend/models/*.onnx.data
 backend/server.py.bkp
 runs/
 

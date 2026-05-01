@@ -12,8 +12,6 @@ import os
 import gc
 import math
 import copy
-import torch
-from sb3_contrib import RecurrentPPO
 import warnings
 import aiohttp
 from dotenv import load_dotenv
@@ -24,11 +22,10 @@ from starlette.websockets import WebSocketState
 import io
 import csv
 
-warnings.filterwarnings("ignore")
+# 🚀 INJEÇÃO DO ONNX RUNTIME (Substituto Leve do PyTorch)
+import onnxruntime as ort
 
-# Trava o PyTorch para não estrangular a CPU do Render
-torch.set_num_threads(1)
-torch.set_grad_enabled(False)
+warnings.filterwarnings("ignore")
 
 # --- SANITIZADOR UNIVERSAL (Elimina o veneno do NaN do Javascript) ---
 def clean_nans(obj):
@@ -51,7 +48,8 @@ def clean_nans(obj):
 # --- CONFIGURAÇÕES DO SISTEMA ---
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m' 
-MODEL_PATH = "models/sniper_pro_gen_6.zip" 
+# 🚀 O ALVO AGORA É O ARQUIVO ONNX
+MODEL_PATH = "models/sniper_pro_gen_7.onnx" 
 START_TIME = time.time()
 FEE_RATE = 0.0010 
 STOP_LOSS_PCT = -0.010    
@@ -134,10 +132,11 @@ state = {
     }
 }
 
-model = None
+# 🚀 VARIÁVEIS DO MOTOR ONNX
+onnx_session = None
 exchange = None
+# A memória LSTM agora é armazenada como uma tupla de arrays numpy (H e C)
 lstm_states = None 
-episode_starts = np.ones((1,), dtype=bool)
 feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct']
 last_analysis_time = 0
 cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
@@ -160,64 +159,37 @@ def update_safe_state():
     except Exception as e:
         print(f">>> ❌ Erro ao sanitizar estado: {e}")
 
-def run_startup_backtest(df_clean, model_instance):
-    """Backtest rápido de inicialização - apenas primeira validação."""
-    print(">>> 🔬 EXECUTANDO BACKTEST DE REBOOT...")
-    if model_instance is None:
-        return 50.0
-    
-    test_wins, test_losses = 0, 0
-    sim_pos, sim_entry = 0, 0.0
-    temp_lstm, temp_ep = None, np.ones((1,), dtype=bool)
-    test_df = df_clean.tail(100)
-    
-    start_bt = time.time()
-    max_bt_time = 3.0 
-    
-    for i in range(len(test_df)):
-        if (time.time() - start_bt) > max_bt_time: break
-        try:
-            obs = test_df[feature_cols].iloc[i].values.astype(np.float32)
-            action, temp_lstm = model_instance.predict(obs, state=temp_lstm, episode_start=temp_ep, deterministic=True)
-            temp_ep = np.zeros((1,), dtype=bool)
-            act_idx = action.item()
-            target_pos = 1 if act_idx == 1 else (-1 if act_idx == 2 else 0)
-            
-            if target_pos != sim_pos:
-                if sim_pos != 0:
-                    chg = (test_df.iloc[i]['close'] - sim_entry) / sim_entry
-                    pnl = chg if sim_pos == 1 else -chg
-                    if pnl > 0: test_wins += 1
-                    else: test_losses += 1
-                if target_pos != 0: sim_entry = test_df.iloc[i]['close']
-                sim_pos = target_pos
-        except: continue
-    
-    tot = test_wins + test_losses
-    win_rate = round((test_wins/tot)*100, 1) if tot > 0 else 50.0
-    return win_rate
-
+# 🚀 REFATORAÇÃO: O CARREGADOR ONNX
 def load_brain(path=MODEL_PATH):
-    """Carrega modelo de forma síncrona com otimização agressiva de RAM."""
-    global model
+    """Inicializa a sessão de inferência ultraleve do ONNX Runtime."""
+    global onnx_session, lstm_states
     try:
         if os.path.exists(path):
-            import zipfile
-            if not zipfile.is_zipfile(path):
-                print(f"❌ Arquivo {path} NÃO é um ZIP válido!")
-                model = None
+            if not path.endswith('.onnx'):
+                print(f"❌ O arquivo {path} NÃO é uma compilação ONNX (.onnx) válida!")
+                onnx_session = None
                 return
             
-            print(f">>> 🧠 Carregando modelo: {path}")
+            print(f">>> ⚙️ Inicializando Motor ONNX: {path}")
             gc.collect()
-            model = RecurrentPPO.load(path, device="cpu")
+            
+            # Força o uso estrito da CPU para poupar recursos no Render
+            providers = ['CPUExecutionProvider']
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = 1 # Restringe threads para não sufocar a máquina
+            
+            onnx_session = ort.InferenceSession(path, sess_options=sess_options, providers=providers)
+            
+            # Resetamos a memória LSTM ao carregar um novo cérebro
+            lstm_states = None 
             gc.collect()
-            print(f">>> ✅ Modelo carregado com sucesso")
+            print(f">>> ✅ Sessão ONNX Runtime estabelecida com sucesso")
         else:
-            model = None
+            onnx_session = None
+            print(f">>> ⚠️ Modelo ONNX não encontrado em {path}")
     except Exception as e:
-        print(f"❌ Erro ao carregar modelo: {e}")
-        model = None
+        print(f"❌ Erro crítico ao carregar motor ONNX: {e}")
+        onnx_session = None
     finally:
         gc.collect()
 
@@ -225,7 +197,7 @@ def get_uptime():
     seconds = int(time.time() - START_TIME)
     return time.strftime('%H:%M:%S', time.gmtime(seconds))
 
-# --- INICIALIZAÇÃO DO CLIENTE (SDK ATUALIZADO) ---
+# --- INICIALIZAÇÃO DO CLIENTE GEMINI ---
 from google import genai
 try:
     if GEMINI_KEY: client = genai.Client(api_key=GEMINI_KEY)
@@ -336,7 +308,8 @@ async def analyze_sentiment_with_llm(headlines):
 
 # --- LOOP PRINCIPAL DO TRADER (SNIPER) ---
 async def sniper_loop():
-    global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
+    # 🚀 Substituição de variaveis globais (episode_starts retirado)
+    global state, exchange, lstm_states, balance, position, entry_price, wins, losses
     global kill_switch_active, last_entry_ts, warming_up, warmup_counter, consecutive_signals, last_signal
 
     try:
@@ -348,29 +321,25 @@ async def sniper_loop():
     state["status"] = "Sistema iniciando... (conectado à corretora)"
     last_fetch_ts = 0
     lstm_states = None
-    episode_starts = np.ones((1,), dtype=bool)
     consecutive_signals = 0
     last_signal = 0
 
-    # 🚀 1. TEMPO DE RESPIRO (Para o Render estabilizar o WebSocket)
     print(">>> ⏳ [Sniper] Estabilizando rotas de rede (15s)...")
     state["status"] = "Estabilizando rotas de rede..."
     await asyncio.sleep(15)
     
-    # 🚀 2. CARREGAMENTO ATIVO E ATRASADO (Lazy Load)
-    print(">>> 🧠 [Sniper] Iniciando carregamento da Rede Neural...")
-    state["status"] = "🧠 Carregando Rede Neural pesada..."
+    print(">>> ⚙️ [Sniper] Conectando Motor ONNX de Inferência...")
+    state["status"] = "⚙️ Carregando Motor de Inferência..."
     if os.path.exists(MODEL_PATH):
         await asyncio.to_thread(load_brain, MODEL_PATH)
     else:
         print(f">>> ⚠️ [Sniper] Modelo não encontrado em {MODEL_PATH}")
 
-    # 3. VERIFICAÇÃO FINAL (Substitui o antigo while loop de espera)
-    if model is not None: 
-        print(">>> ✅ [Sniper] Modelo PRONTO.")
+    if onnx_session is not None: 
+        print(">>> ✅ [Sniper] ONNX Session PRONTA.")
         await asyncio.sleep(0.1)
     else:
-        print(">>> ⚠️ [Sniper] Sem modelo. Continuando em modo puro TA...")
+        print(">>> ⚠️ [Sniper] Sem motor. Continuando em modo puro TA...")
 
     loop_counter = 0 
     
@@ -413,14 +382,12 @@ async def sniper_loop():
                         
                         return df, df.dropna().copy()
                     
-                    # 🚀 A MÁGICA: Executa a matemática pesada sem travar o FastAPI
                     df, df_clean = await asyncio.to_thread(process_indicators, ohlcv)
                     
                     last_fetch_ts = now_ts
-                    print(f">>> ✅ Indicadores calculados ({len(df_clean)} velas limpas)")
+                    # print(f">>> ✅ Indicadores calculados ({len(df_clean)} velas limpas)")
                     
-                    # 🧹 NOVA LINHA: Limpeza cirúrgica da RAM após o Pandas trabalhar
-                    del df # Destrói a tabela não-limpa da memória imediatamente
+                    del df
                     gc.collect()
                 except Exception as e:
                     state["status"] = "❌ Erro conexão API"
@@ -440,23 +407,6 @@ async def sniper_loop():
                 state["floating_pnl"] = floating_pnl
                 state["display_balance"] = balance + floating_pnl
 
-                if startup_phase:
-                    if model is None:
-                        state["status"] = "⏳ Aguardando modelo para backtest..."
-                        await asyncio.sleep(0.5)
-                        continue 
-                    
-                    state["status"] = "Reinício: executando backtest..."
-                    startup_timer += 1
-                    if startup_timer == 1:
-                        res = await asyncio.to_thread(run_startup_backtest, df_clean, model)
-                        state["adaptation"]["initial_win_rate"] = res
-                        state["adaptation"]["current_win_rate"] = res
-                    if startup_timer > 2: 
-                        startup_phase = False
-                        lstm_states = None 
-                        
-                # Estados Iniciais (Corte de Gordura Aplicado)
                 if warming_up:
                     warmup_counter += 1
                     state["status"] = f"🛡️ AQUECIMENTO DE GRÁFICOS... ({warmup_counter}/15)"
@@ -465,21 +415,49 @@ async def sniper_loop():
                         state["status"] = "📊 AGUARDANDO SINAL..."
 
                 else:
-                    # IA PREDIÇÃO (Só se modelo já carregou)
-                    if model is not None:
+                    # 🚀 REFATORAÇÃO: IA PREDIÇÃO (ONNX RUNTIME VIA INFERÊNCIA)
+                    if onnx_session is not None:
                         try:
-                            obs = last_row[feature_cols].values.astype(np.float32)
-                            action, lstm_states = await asyncio.to_thread(
-                                model.predict, obs, state=lstm_states, episode_start=episode_starts, deterministic=True
-                            )
-                            episode_starts = np.zeros((1,), dtype=bool)
-                            act_idx = action.item()
-                        except:
+                            # 1. Preparar a matriz de observação (Batch de 1)
+                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 9)
+                            
+                            # 2. Gestão Dinâmica da Memória LSTM
+                            if lstm_states is None:
+                                # O ONNX exige a forma exata se os estados estiverem vazios: (1, 1, 64)
+                                h_state = np.zeros((1, 1, 64), dtype=np.float32)
+                                c_state = np.zeros((1, 1, 64), dtype=np.float32)
+                            else:
+                                h_state, c_state = lstm_states
+                                
+                            # 3. Empacotar dicionário exato exigido pelo modelo compilado
+                            ort_inputs = {
+                                "obs": obs_array,
+                                "lstm_states_h": h_state,
+                                "lstm_states_c": c_state
+                            }
+                            
+                            # 4. Executar o Grafo Neural
+                            def run_onnx_inference(sess, inputs):
+                                return sess.run(None, inputs)
+                                
+                            ort_outs = await asyncio.to_thread(run_onnx_inference, onnx_session, ort_inputs)
+                            
+                            # 5. Extrair resultados: O PyTorch 2.1 pode cuspir múltiplos arrays,
+                            # a ação é sempre o índice [0], e a LSTM costuma estar oculta nos seguintes
+                            action_array = ort_outs[0]
+                            act_idx = int(action_array.item()) if action_array.size == 1 else int(np.argmax(action_array))
+                            
+                            # Atualizamos a memória apenas se o ONNX tiver retornado novos estados (Opset 17)
+                            if len(ort_outs) >= 3:
+                                lstm_states = (ort_outs[1], ort_outs[2])
+                                
+                        except Exception as trace_e:
+                            print(f">>> ❌ Falha na Inferência ONNX: {trace_e}")
                             act_idx = 0
-                            episode_starts = np.ones((1,), dtype=bool)
+                            lstm_states = None # Reset de memória por segurança
                     else:
                         act_idx = 0
-                        state["status"] = "⏳ MODELO CARREGANDO... (aguardando)"
+                        state["status"] = "⏳ MOTOR OFFLINE..."
 
                     # Validação de Sinais
                     if act_idx != 0 and act_idx == last_signal: consecutive_signals += 1
@@ -561,11 +539,6 @@ async def sniper_loop():
                 }
             
             update_safe_state() 
-            # APAGAR ESTAS LINHAS:
-            # 🚀 TICKET 2 CONCLUÍDO: Desativação da "Pausa Mundial" a cada segundo
-            if loop_counter % 900 == 0:
-                print(">>> 🧹 [GC] Executando limpeza de memória programada (Pausa Rápida)...")
-                gc.collect()
             await asyncio.sleep(1.0)
             
         except Exception as e:
@@ -591,9 +564,6 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(sniper_loop())
         asyncio.create_task(analyst_market_loop())
         
-        # 🚀 AÇÃO EXECUTADA: Carregamento do modelo removido do lifespan
-        # Deixamos o Uvicorn subir imediatamente!
-        
     except Exception as e:
         print(f">>> ❌ Erro no startup: {e}")
     yield
@@ -611,8 +581,8 @@ app.add_middleware(
 
 @app.get("/ready")
 async def readiness_probe():
-    if model is None: return {"ready": False, "status": "Modelo carregando...", "code": 503}
-    return {"ready": True, "status": "Sistema pronto", "code": 200}
+    if onnx_session is None: return {"ready": False, "status": "Motor IA carregando...", "code": 503}
+    return {"ready": True, "status": "Sistema ONNX pronto", "code": 200}
 
 @app.get("/api/state")
 async def get_state_snapshot():
@@ -620,15 +590,12 @@ async def get_state_snapshot():
     except Exception as e:
         return Response(content=json.dumps({"error": str(e), "status": "offline"}), media_type="application/json", status_code=500)
 
-# 🚀 TICKET 500: HIGIENIZAÇÃO DA ROTA E MANIPULAÇÃO SEGURA
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     try:
-        # Accept OBRIGATÓRIO E IMEDIATO antes de qualquer outra lógica!
         await websocket.accept()
-        print(f">>> [WS] Conexão ACEITA do cliente: {websocket.client}")
+        # print(f">>> [WS] Conexão ACEITA do cliente: {websocket.client}")
         
-        # Registra com segurança
         global connected_clients
         connected_clients.append(websocket)
         
@@ -642,10 +609,10 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(1)
             
     except WebSocketDisconnect:
-        print(">>> [WS] Cliente desconectado.")
+        # print(">>> [WS] Cliente desconectado.")
         if websocket in connected_clients: connected_clients.remove(websocket)
     except Exception as e:
-        print(f">>> ❌ [WS] Erro Fatal no Loop: {type(e).__name__}: {e}")
+       #  print(f">>> ❌ [WS] Erro Fatal no Loop: {type(e).__name__}: {e}")
         if websocket in connected_clients: connected_clients.remove(websocket)
 
 @app.get("/api/historico")
@@ -674,24 +641,31 @@ async def download_dados(x_admin_password: str = Header(None)):
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=live_market_data_{int(time.time())}.csv"})
 
+# 🚀 REFATORAÇÃO: UPLOAD DO CÉREBRO ONNX
 @app.post("/api/upload-cerebro")
 async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = Header(None)):
     global MODEL_PATH
     if x_admin_password != ADMIN_PASS: raise HTTPException(status_code=401, detail="Acesso Negado.")
     try:
         if not os.path.exists("models"): os.makedirs("models")
+        
+        # A validação foca no ONNX e rejeita zips nativamente
+        if not file.filename.endswith('.onnx'):
+            raise HTTPException(status_code=400, detail="Formato rejeitado. O ambiente de produção aceita APENAS arquivos compilados .onnx!")
+            
         new_model_path = os.path.join("models", file.filename)
         content = await file.read()
-        import zipfile
-        try:
-            with zipfile.ZipFile(io.BytesIO(content)) as zf: zf.testzip()
-        except: raise HTTPException(status_code=400, detail=f"Arquivo inválido.")
+        
         with open(new_model_path, "wb") as buffer: buffer.write(content)
         MODEL_PATH = new_model_path
+        
+        # Reinicia o motor com o novo arquivo
         await asyncio.to_thread(load_brain, MODEL_PATH)
-        if model is None: raise Exception("Falha ao carregar.")
+        
+        if onnx_session is None: raise Exception("Falha ao inicializar o grafo ONNX.")
+        
         state["adaptation"]["generation"] += 1
-        state["adaptation"]["learning_state"] = f"INJETADO ({file.filename})"
+        state["adaptation"]["learning_state"] = f"COMPILADO INJETADO ({file.filename})"
         return {"status": "sucesso"}
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
@@ -702,16 +676,14 @@ if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     print(f">>> 🚀 Iniciando servidor em {host}:{port}")
     
-    # 🚀 TICKET 500: LOGS DETALHADOS ATIVADOS (Modo Debug)
+    # 🚀 OPERAÇÃO SILÊNCIO DE RÁDIO: Logs verbosos desativados
     uvicorn.run(
         "server:app",
         host=host,
         port=port,
         reload=False,
-        # As duas linhas abaixo retiram a mordaça do servidor (Venda removida)
-        log_level="debug", 
-        access_log=True,
-        # Opcional (Aconselhado para Proxy/Render):
+        log_level="warning",   # 🚀 SILÊNCIO TOTAL: Oculta INFOs e WebSockets. Mostra apenas ERROS ou AVISOS.
+        access_log=False,   # <--- Desativa o spam de "GET /api/state 200 OK" a cada segundo
         proxy_headers=True, 
         forwarded_allow_ips="*"
     )

@@ -154,7 +154,7 @@ function DojoPanel({ state }) {
   const handleUpload = async () => {
     if (!senha || !file) { setMensagem('⚠️ Chave ou arquivo ausente.'); return; }
     setLoading(true);
-    setMensagem('⏳ Injetando...');
+    setMensagem('⏳ Injetando ONNX...');
     
     const formData = new FormData();
     formData.append('file', file);
@@ -167,7 +167,7 @@ function DojoPanel({ state }) {
       });
       
       if (res.ok) { 
-        setMensagem('✅ Geração Injetada!'); 
+        setMensagem('✅ Geração Injetada com Sucesso!'); 
         setFile(null); 
       } else { 
         setMensagem('❌ Acesso Negado (Senha Incorreta).'); 
@@ -194,8 +194,9 @@ function DojoPanel({ state }) {
            <button onClick={handleDownload} className="w-full bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/50 py-2 rounded text-xs font-bold transition-all mt-auto">EXPORTAR HISTÓRICO (CSV)</button>
         </div>
         <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-35">
-           <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 mb-2 uppercase tracking-widest"><Upload size={14}/> Nova Geração</label>
-           <input type="file" accept=".zip" onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)} className="text-[10px] text-slate-400 mb-2" />
+           <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 mb-1 uppercase tracking-widest"><Upload size={14}/> Injetar Motor ONNX</label>
+           <span className="text-[9px] text-purple-400 mb-2 font-mono">Geração 7 (Arquitetura ONNX)</span>
+           <input type="file" accept=".onnx" onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)} className="text-[10px] text-slate-400 mb-2" />
            <button onClick={handleUpload} disabled={loading || !file} className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2 rounded text-xs font-bold shadow-lg shadow-purple-500/20 transition-all mt-auto">APLICAR CÉREBRO</button>
         </div>
       </div>
@@ -685,7 +686,7 @@ export default function Dashboard() {
                 Acertos Reais: {data.adaptation.current_win_rate}%
               </div>
               <div className="text-xs text-purple-400 font-mono font-semibold tracking-wide border-t border-purple-500/30 pt-1 mt-1">
-                Backtest Inicial: {data.adaptation.initial_win_rate}%
+                Status: Motor ONNX Compilado
               </div>
             </div>
           </div>
@@ -733,7 +734,7 @@ export default function Dashboard() {
         <p className="text-center md:text-left leading-relaxed">
           © {new Date().getFullYear()}{' '}
           <span className="text-slate-400">Otávio Henrique Filgueiras dos Santos</span>
-          <span className="block text-xs text-slate-600 mt-1">IA Trader Pro — monitoramento e simulação.</span>
+          <span className="block text-xs text-slate-600 mt-1">IA Trader Pro — monitoramento e simulação. Uso por sua conta e risco.</span>
         </p>
         <nav className="flex items-center gap-5" aria-label="Redes sociais">
           <a
