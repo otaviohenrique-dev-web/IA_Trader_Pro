@@ -207,42 +207,116 @@ async def fetch_btc_news():
     except: return []
 
 async def analyze_sentiment_with_llm(headlines):
+    """Usa o modelo Gemini 3 Flash Preview calibrado para ignorar ruído."""
+    
     global last_analysis_time, cached_analysis
     current_time = time.time()
-    if current_time - last_analysis_time < 1800: return cached_analysis
-    if not headlines or not client: return {"score": 0.1, "status": "SAFE", "reason": "Monitoramento passivo ativo."}
     
-    prompt = f"Avalie o risco Bitcoin (0.0 a 1.0) nestas notícias: {headlines}. Responda APENAS JSON: {{\"score\": float, \"status\": \"SAFE\"|\"CAUTION\"|\"DANGER\", \"reason\": \"str\"}}"
+    # 🚀 AÇÃO 1 CONCLUÍDA: TRAVA DO CACHE de 3600 segundos (1 hora)
+    if current_time - last_analysis_time < 3600:
+        print(">>> ⏳ IA em Cooldown. Retornando análise de risco do cache para economizar cota.")
+        return cached_analysis
+
+    if not headlines:
+        return {"score": 0.1, "status": "SAFE", "reason": "Mercado calmo (Sem notícias)"}
+    
+    if not client:
+        print(">>> ⚠️ Cliente Genai não disponível. Retornando análise segura (SAFE).")
+        return {"score": 0.1, "status": "SAFE", "reason": "Cliente IA indisponível - modo técnico"}
+    
+    prompt = f"""
+    Você é um Gestor de Risco Quantitativo sênior de Bitcoin. Avalie o risco macroeconômico atual baseado nestas manchetes (em português ou inglês):
+    {headlines}
+
+    REGULAGEM DE RISCO ESTREITA (O mercado cripto é naturalmente volátil, ignore o sensacionalismo):
+    - Score 0.0 a 0.60 (SAFE): Notícias de adoção, ETFs, desenvolvimentos técnicos, ou FUD genérico (ex: "analista prevê queda", oscilações normais, correções pequenas). O bot PODE operar.
+    - Score 0.61 a 0.80 (CAUTION): Notícias macroeconômicas ruins REAIS (ex: aumento severo de juros do FED, inflação muito acima do esperado, hack de corretora média).
+    - Score 0.81 a 1.0 (DANGER): Eventos catastróficos globais, falência de top 3 corretoras (estilo FTX), banimento em grandes potências, guerras em grande escala.
+
+    Responda APENAS em JSON puro: {{"score": float, "status": "SAFE" ou "CAUTION" ou "DANGER", "reason": "resumo de 1 linha do sentimento geral"}}
+    """
+    
     try:
-        response = await asyncio.to_thread(client.models.generate_content, model="gemini-3-flash-preview", contents=prompt)
+        response = await asyncio.to_thread(
+            client.models.generate_content, 
+            model="gemini-3-flash-preview", 
+            contents=prompt
+        )
+        
         raw_text = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(raw_text)
+        
         score = float(data.get("score", 0.0))
-        data["status"] = "SAFE" if score <= 0.45 else ("CAUTION" if score <= 0.75 else "DANGER")
+        if score > 1.0: score = score / 10.0 if score <= 10.0 else 1.0
+        
+        # 🚀 AÇÃO 2 CONCLUÍDA: Expansão da Tolerância de Risco (Filtro FUD até 0.60)
+        data["status"] = "SAFE" if score <= 0.60 else ("CAUTION" if score <= 0.80 else "DANGER")
+            
         data["score"] = score
+        
         cached_analysis = data
         last_analysis_time = current_time
+        
         return data
-    except: return cached_analysis
+        
+    except Exception as e:
+        print(f"⚠️ Erro na análise da IA: {e}")
+        return cached_analysis
 
 async def analyst_market_loop():
+    print(">>> 🕵️ IA_ANALISTA: Iniciando Sentinela de Mercado...")
+    
     global kill_switch_active
+    headers = {"User-Agent": _NEWS_UA}
+    print(">>> ✅ IA_ANALISTA: Pronto para análise de notícias")
+    
     while True:
         try:
             headlines = await fetch_btc_news()
+
+            # Fallback: feed geral CryptoCompare (PT, depois EN se vazio)
+            if not headlines:
+                async with aiohttp.ClientSession() as session:
+                    for q in ("lang=PT", "lang=EN"):
+                        headlines = await _cryptocompare_news_titles(session, q, headers)
+                        if headlines:
+                            break
+
+            # --- CIRCUITO DE PROTEÇÃO CONTRA COTA ESGOTADA ---
             if headlines and headlines[0] == "API_ESGOTADA":
-                state["news_agent"].update({"status": "SAFE", "risk_level": "MODO TÉCNICO"})
+                print(">>> ⚠️ API de Notícias Esgotada. Entrando em MODO 100% TÉCNICO.")
+                state["news_agent"].update({
+                    "status": "SAFE",
+                    "sentiment_score": 0.0,
+                    "risk_level": "MODO TÉCNICO",
+                    "last_headlines": ["⚠️ ALERTA: API DE NOTÍCIAS ESGOTADA - TRABALHANDO 100% VIA GRÁFICOS (TA) •"]
+                })
                 kill_switch_active = False
                 await asyncio.sleep(3600)
                 continue
+
             analysis = await analyze_sentiment_with_llm(headlines)
-            state["news_agent"].update({"status": analysis["status"], "sentiment_score": analysis["score"], "risk_level": analysis["status"], "last_headlines": headlines if headlines else ["MONITORANDO •"]})
-            if analysis["status"] != "SAFE":
-                print(f">>> 🧠 [Sentinela] Mudança de risco detectada: {analysis['status']}")
-            kill_switch_active = analysis["status"] == "DANGER"
-            update_safe_state()
-            await asyncio.sleep(600) 
-        except: await asyncio.sleep(60)
+            
+            state["news_agent"].update({
+                "status": analysis["status"],
+                "sentiment_score": analysis["score"],
+                "risk_level": analysis["status"],
+                "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
+            })
+            
+            if analysis["status"] == "SAFE":
+                kill_switch_active = False
+            
+            update_safe_state() 
+            
+            print(f">>> ✅ Analista: {analysis['status']} | Letreiro atualizado com {len(headlines)} notícias.")
+            
+            # 🚀 AÇÃO 1 CONCLUÍDA: Descanso de 1 hora (Consumo Inteligente)
+            await asyncio.sleep(3600) 
+            
+        except Exception as e:
+            print(f"❌ Erro no Analista: {e}")
+            await asyncio.sleep(60)
 
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses, kill_switch_active, last_entry_ts, startup_phase, startup_timer, warming_up, warmup_counter, consecutive_signals, last_signal
@@ -312,7 +386,8 @@ async def sniper_loop():
                             rem = 900 - (int(time.time()) - last_entry_ts)
                             if rem > 0: target_pos = position; state["status"] = f"PROTEÇÃO: {rem}s"
                             else: state["status"] = "📊 MONITORANDO..."; target_pos = 0 if act_idx == 0 else position
-                        elif position == 0 and state["news_agent"]["status"] == "SAFE" and consecutive_signals >= 3:
+                        # O bot opera livremente a menos que o Kill Switch (DANGER) esteja ativado
+                        elif position == 0 and not kill_switch_active and consecutive_signals >= 3:
                             target_pos = 1 if act_idx == 1 else (-1 if act_idx == 2 else 0)
 
                 if target_pos != position:

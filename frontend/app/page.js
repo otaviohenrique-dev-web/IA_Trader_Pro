@@ -128,7 +128,6 @@ function DojoPanel({ state }) {
     setMensagem('⏳ Gerando arquivo...');
     
     try {
-      // ✅ Prefixo /api/ adicionado corretamente
       const res = await fetch(`${API_URL}/api/download-dados`, {
         method: 'GET',
         headers: { 'x-admin-password': senha }
@@ -161,7 +160,6 @@ function DojoPanel({ state }) {
     formData.append('file', file);
     
     try {
-      // ✅ Prefixo /api/ adicionado corretamente
       const res = await fetch(`${API_URL}/api/upload-cerebro`, { 
         method: 'POST', 
         headers: { 'x-admin-password': senha },
@@ -191,11 +189,11 @@ function DojoPanel({ state }) {
           <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-white font-mono text-sm" placeholder="••••••••" />
           {mensagem && <div className="text-[10px] font-mono text-center p-1 bg-purple-500/10 text-purple-300 rounded border border-purple-500/20">{mensagem}</div>}
         </div>
-        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-[140px]">
+        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-35">
            <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 mb-2 uppercase tracking-widest"><Database size={14}/> Coleta de Dados</label>
            <button onClick={handleDownload} className="w-full bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/50 py-2 rounded text-xs font-bold transition-all mt-auto">EXPORTAR HISTÓRICO (CSV)</button>
         </div>
-        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-[140px]">
+        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-35">
            <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 mb-2 uppercase tracking-widest"><Upload size={14}/> Nova Geração</label>
            <input type="file" accept=".zip" onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)} className="text-[10px] text-slate-400 mb-2" />
            <button onClick={handleUpload} disabled={loading || !file} className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2 rounded text-xs font-bold shadow-lg shadow-purple-500/20 transition-all mt-auto">APLICAR CÉREBRO</button>
@@ -439,7 +437,7 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
         className="absolute z-50 bg-slate-900/90 backdrop-blur border border-purple-500/50 p-3 rounded shadow-lg pointer-events-none transition-opacity duration-100"
         style={{ display: 'none' }}
       ></div>
-      <div ref={chartContainerRef} className="w-full h-[450px]"></div>
+      <div ref={chartContainerRef} className="w-full h-112.5"></div>
     </div>
   );
 }
@@ -465,7 +463,6 @@ export default function Dashboard() {
       if (wsConnected) return; 
       
       try {
-        // Rota state já está usando o /api/ de forma correta.
         const res = await fetch(`${httpBase}/api/state`);
         if (res.ok && !cancelled) {
             const text = await res.text();
@@ -615,7 +612,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         
         {/* Ativo */}
-        <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 shadow-lg flex flex-col justify-between min-h-[140px]">
+        <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 shadow-lg flex flex-col justify-between min-h-35">
           <div className="text-slate-400 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
             <Bitcoin size={16} className="text-orange-500"/> Ativo
           </div>
@@ -625,7 +622,7 @@ export default function Dashboard() {
         </div>
 
         {/* Card 2: Saldo Dinâmico */}
-        <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-[140px]">
+        <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-35">
           {data.in_position && (
             <div className={`absolute top-0 right-0 w-1.5 h-full ${data.floating_pnl >= 0 ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
           )}
@@ -647,7 +644,7 @@ export default function Dashboard() {
         </div>
 
         {/* Status / Cronômetro */}
-        <div className={`p-5 rounded-xl border shadow-lg transition-all duration-500 flex flex-col justify-between min-h-[140px] ${data.status.includes("PROTEÇÃO") ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 bg-slate-800/50'}`}>
+        <div className={`p-5 rounded-xl border shadow-lg transition-all duration-500 flex flex-col justify-between min-h-35 ${data.status.includes("PROTEÇÃO") ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 bg-slate-800/50'}`}>
           <div className="text-slate-400 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
             <Zap size={16} className={data.status.includes("PROTEÇÃO") ? "text-blue-400 animate-pulse" : ""}/> 
             Status Operacional
@@ -675,7 +672,7 @@ export default function Dashboard() {
         <NewsSentinel data={data.news_agent} />
 
         {/* Protocolo */}
-        <div className="bg-gradient-to-br from-purple-900/40 to-slate-900 p-5 rounded-xl border border-purple-500/30 shadow-lg flex flex-col justify-between min-h-[140px]">
+        <div className="bg-linear-to-br from-purple-900/40 to-slate-900 p-5 rounded-xl border border-purple-500/30 shadow-lg flex flex-col justify-between min-h-35">
           <div className="text-purple-300 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
             <Brain size={16}/> Protocolo
           </div>
@@ -683,8 +680,13 @@ export default function Dashboard() {
             <div className="text-3xl lg:text-4xl font-black font-mono text-white">
               GEN {data.adaptation.generation}
             </div>
-            <div className="text-sm lg:text-base text-green-400 font-mono mt-1 font-bold">
-              Acertos: {data.adaptation.current_win_rate}%
+            <div className="mt-2 flex flex-col gap-1">
+              <div className="text-sm lg:text-base text-green-400 font-mono font-bold">
+                Acertos Reais: {data.adaptation.current_win_rate}%
+              </div>
+              <div className="text-xs text-purple-400 font-mono font-semibold tracking-wide border-t border-purple-500/30 pt-1 mt-1">
+                Backtest Inicial: {data.adaptation.initial_win_rate}%
+              </div>
             </div>
           </div>
         </div>
@@ -700,7 +702,7 @@ export default function Dashboard() {
             currentPosition={data.current_position} 
           />
         </div>
-        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-[482px] flex flex-col shadow-lg custom-scrollbar">
+        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-120.5 flex flex-col shadow-lg custom-scrollbar">
           <h2 className="text-xs font-black mb-4 flex items-center gap-2 border-b border-slate-700 pb-2 uppercase tracking-widest shrink-0">
             <List size={16}/> Livro de Ações
           </h2>
@@ -731,7 +733,7 @@ export default function Dashboard() {
         <p className="text-center md:text-left leading-relaxed">
           © {new Date().getFullYear()}{' '}
           <span className="text-slate-400">Otávio Henrique Filgueiras dos Santos</span>
-          <span className="block text-xs text-slate-600 mt-1">IA Trader Pro — monitoramento e simulação. Uso por sua conta e risco.</span>
+          <span className="block text-xs text-slate-600 mt-1">IA Trader Pro — monitoramento e simulação.</span>
         </p>
         <nav className="flex items-center gap-5" aria-label="Redes sociais">
           <a
