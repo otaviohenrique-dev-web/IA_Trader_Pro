@@ -84,8 +84,6 @@ kill_switch_active = False
 max_profit_pct = 0.0  
 
 # Variáveis de Controle de Fluxo
-startup_phase = True
-startup_timer = 0
 warming_up = True 
 warmup_counter = 0
 consecutive_signals = 0 
@@ -339,7 +337,7 @@ async def analyze_sentiment_with_llm(headlines):
 # --- LOOP PRINCIPAL DO TRADER (SNIPER) ---
 async def sniper_loop():
     global state, exchange, lstm_states, episode_starts, balance, position, entry_price, wins, losses
-    global kill_switch_active, last_entry_ts, startup_phase, startup_timer, warming_up, warmup_counter, consecutive_signals, last_signal
+    global kill_switch_active, last_entry_ts, warming_up, warmup_counter, consecutive_signals, last_signal
 
     try:
         exchange = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
@@ -457,13 +455,17 @@ async def sniper_loop():
                     if startup_timer > 2: 
                         startup_phase = False
                         lstm_states = None 
-                elif warming_up:
+                        
+                # Estados Iniciais (Corte de Gordura Aplicado)
+                if warming_up:
                     warmup_counter += 1
-                    state["status"] = f"🛡️ AQUECIMENTO... ({warmup_counter}/15)"
+                    state["status"] = f"🛡️ AQUECIMENTO DE GRÁFICOS... ({warmup_counter}/15)"
                     if warmup_counter >= 15:
                         warming_up = False
                         state["status"] = "📊 AGUARDANDO SINAL..."
+
                 else:
+                    # IA PREDIÇÃO (Só se modelo já carregou)
                     if model is not None:
                         try:
                             obs = last_row[feature_cols].values.astype(np.float32)
@@ -479,10 +481,12 @@ async def sniper_loop():
                         act_idx = 0
                         state["status"] = "⏳ MODELO CARREGANDO... (aguardando)"
 
+                    # Validação de Sinais
                     if act_idx != 0 and act_idx == last_signal: consecutive_signals += 1
                     elif act_idx != 0: consecutive_signals = 1; last_signal = act_idx
                     else: consecutive_signals = 0; last_signal = 0
 
+                    # Lógica de Posição
                     if position != 0:
                         remaining = 900 - (int(time.time()) - last_entry_ts)
                         if remaining > 0:
