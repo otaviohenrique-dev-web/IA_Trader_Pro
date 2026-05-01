@@ -28,6 +28,7 @@ warnings.filterwarnings("ignore")
 
 # Trava o PyTorch para não estrangular a CPU do Render
 torch.set_num_threads(1)
+torch.set_grad_enabled(False)
 
 # --- SANITIZADOR UNIVERSAL (Elimina o veneno do NaN do Javascript) ---
 def clean_nans(obj):
@@ -414,8 +415,15 @@ async def sniper_loop():
                         
                         return df, df.dropna().copy()
                     
+                    # 🚀 A MÁGICA: Executa a matemática pesada sem travar o FastAPI
                     df, df_clean = await asyncio.to_thread(process_indicators, ohlcv)
+                    
                     last_fetch_ts = now_ts
+                    print(f">>> ✅ Indicadores calculados ({len(df_clean)} velas limpas)")
+                    
+                    # 🧹 NOVA LINHA: Limpeza cirúrgica da RAM após o Pandas trabalhar
+                    del df # Destrói a tabela não-limpa da memória imediatamente
+                    gc.collect()
                 except Exception as e:
                     state["status"] = "❌ Erro conexão API"
                     await asyncio.sleep(2)
@@ -549,7 +557,11 @@ async def sniper_loop():
                 }
             
             update_safe_state() 
-            if loop_counter % 900 == 0: gc.collect() 
+            # APAGAR ESTAS LINHAS:
+            # 🚀 TICKET 2 CONCLUÍDO: Desativação da "Pausa Mundial" a cada segundo
+            if loop_counter % 900 == 0:
+                print(">>> 🧹 [GC] Executando limpeza de memória programada (Pausa Rápida)...")
+                gc.collect()
             await asyncio.sleep(1.0)
             
         except Exception as e:
