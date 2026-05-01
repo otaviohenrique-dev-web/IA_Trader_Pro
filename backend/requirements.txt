@@ -11,4 +11,4 @@ matplotlib
 python-multipart
 gymnasium
 pandas-ta-classic 
-onnxruntime-slim==1.17.0
+onnxruntime
