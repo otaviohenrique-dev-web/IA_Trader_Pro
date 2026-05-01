@@ -64,6 +64,7 @@ backend/models/**/*.pth
 backend/models/**/*.h5
 backend/models/**/*.pt
 backend/models/**/*.onnx
+backend/server.py.bkp
 runs/
 
 # ━━ 7. SCRIPTS DE DESENVOLVIMENTO E PROPRIEDADE INTELECTUAL ━━━━━
