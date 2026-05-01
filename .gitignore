@@ -67,6 +67,8 @@ backend/models/*.pt
 backend/models/*.onnx
 backend/models/*.onnx.data
 backend/server.py.bkp
+frontend/app/pillow.py
+frontend/app/generate_og.py
 runs/
 
 # ━━ 7. SCRIPTS DE DESENVOLVIMENTO E PROPRIEDADE INTELECTUAL ━━━━━
