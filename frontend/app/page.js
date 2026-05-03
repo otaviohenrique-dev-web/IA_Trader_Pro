@@ -8,13 +8,12 @@ import NewsSentinel from '../components/NewsSentinel';
 // 🛡️ BLINDAGEM DE AMBIENTE: Remove formatações Markdown ([url](url)) acidentais
 function sanitizeEnvUrl(urlStr) {
   if (!urlStr) return "";
-  // Se vier no formato Markdown, extrai apenas o conteúdo dentro dos parênteses
   const match = urlStr.match(/^\[.*?\]\((.*?)\)$/);
   const cleanStr = match ? match[1] : urlStr;
-  return cleanStr.trim().replace(/\/$/, ""); // Limpa espaços e a barra final
+  return cleanStr.trim().replace(/\/$/, ""); 
 }
 
-/** HTTP base do FastAPI (ex.: http://127.0.0.1:10000). Opcional: NEXT_PUBLIC_API_URL */
+/** HTTP base do FastAPI */
 function backendHttpBase() {
   const rawApi = process.env.NEXT_PUBLIC_API_URL;
   if (rawApi) return sanitizeEnvUrl(rawApi);
@@ -27,7 +26,7 @@ function backendHttpBase() {
     .replace(/\/ws\/?$/i, "");
 }
 
-/** WebSocket do backend (termina em /ws). Opcional: NEXT_PUBLIC_WS_URL */
+/** WebSocket do backend */
 function backendWsUrl() {
   const rawWs = process.env.NEXT_PUBLIC_WS_URL;
   if (rawWs) return sanitizeEnvUrl(rawWs);
@@ -40,7 +39,6 @@ function backendWsUrl() {
   }
   return "ws://127.0.0.1:10000/ws";
 }
-
 
 // ==========================================
 // 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
@@ -70,10 +68,14 @@ const calculateZigZag = (data, thresholdPct = 0.5) => {
     }
   }
   pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
-  return pivots.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i).sort((a, b) => a.time - b.time);
+  
+  // 🛡️ BLINDAGEM: Filtra topos/fundos corrompidos antes de injetar na LineSeries
+  return pivots
+    .filter((v, i, a) => v.value != null && !Number.isNaN(v.value) && a.findIndex(t => t.time === v.time) === i)
+    .sort((a, b) => a.time - b.time);
 };
 
-/** Marcadores de entrada com preço Y exato (lightweight-charts v5). */
+/** Marcadores de entrada com preço Y exato */
 function prepareChartMarkers(markers, candleByTime) {
   if (!markers?.length) return [];
   return markers.map((m) => {
@@ -86,10 +88,7 @@ function prepareChartMarkers(markers, candleByTime) {
   });
 }
 
-/**
- * Linha horizontal no preço de entrada: do candle de entrada até o de saída (ou até o candle ao vivo se aberto).
- * Usa Whitespace entre segmentos para não ligar trades diferentes.
- */
+/** Linha horizontal no preço de entrada */
 function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPriceState, candleMap) {
   if (!markers?.length) return [];
   const sorted = [...markers].sort((a, b) => a.time - b.time);
@@ -110,15 +109,10 @@ function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPric
       segments.push({ t0: ent.time, t1: exit.time, price: px });
     } else {
       let endT = liveCandle?.time != null ? Number(liveCandle.time) : ent.time;
-      
-      // BLINDAGEM 1: Fallback seguro para entryPriceState
       if (inPosition && entryPriceState != null && !Number.isNaN(Number(entryPriceState))) {
         px = Number(entryPriceState);
       }
-      
       if (endT <= ent.time) endT = ent.time + 900;
-      
-      // Validação final antes de criar o segmento
       if (px != null && !Number.isNaN(px)) {
         segments.push({ t0: ent.time, t1: endT, price: px });
       }
@@ -128,14 +122,12 @@ function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPric
   const out = [];
   segments.forEach((s, i) => {
     if (i > 0) out.push({ time: segments[i - 1].t1 });
-    // Somente injeta pontos se o price for garantidamente válido
     if (s.price != null && !Number.isNaN(s.price)) {
       out.push({ time: s.t0, value: s.price });
       out.push({ time: s.t1, value: s.price });
     }
   });
   
-  // BLINDAGEM 2 (O Bypass Definitivo): Remove qualquer ponto que tenha vazado com value inválido
   return out.filter(point => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
 }
 
@@ -153,15 +145,9 @@ function DojoPanel({ state }) {
   const handleDownload = async () => {
     if (!senha) { setMensagem('⚠️ Digite a senha Admin.'); return; }
     setMensagem('⏳ Gerando arquivo...');
-    
     try {
-      const res = await fetch(`${API_URL}/api/download-dados`, {
-        method: 'GET',
-        headers: { 'x-admin-password': senha }
-      });
-      
+      const res = await fetch(`${API_URL}/api/download-dados`, { method: 'GET', headers: { 'x-admin-password': senha } });
       if (!res.ok) throw new Error('Senha incorreta ou arquivo inexistente.');
-      
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -171,37 +157,21 @@ function DojoPanel({ state }) {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
-      
       setMensagem('✅ Download Concluído!');
-    } catch (err) {
-      setMensagem(`❌ Erro: ${err.message}`);
-    }
+    } catch (err) { setMensagem(`❌ Erro: ${err.message}`); }
   };
 
   const handleUpload = async () => {
     if (!senha || !file) { setMensagem('⚠️ Chave ou arquivo ausente.'); return; }
     setLoading(true);
     setMensagem('⏳ Injetando ONNX...');
-    
     const formData = new FormData();
     formData.append('file', file);
-    
     try {
-      const res = await fetch(`${API_URL}/api/upload-cerebro`, { 
-        method: 'POST', 
-        headers: { 'x-admin-password': senha },
-        body: formData 
-      });
-      
-      if (res.ok) { 
-        setMensagem('✅ Geração Injetada com Sucesso!'); 
-        setFile(null); 
-      } else { 
-        setMensagem('❌ Acesso Negado (Senha Incorreta).'); 
-      }
-    } catch (err) { 
-      setMensagem('❌ Erro de Conexão.'); 
-    }
+      const res = await fetch(`${API_URL}/api/upload-cerebro`, { method: 'POST', headers: { 'x-admin-password': senha }, body: formData });
+      if (res.ok) { setMensagem('✅ Geração Injetada com Sucesso!'); setFile(null); } 
+      else { setMensagem('❌ Acesso Negado (Senha Incorreta).'); }
+    } catch (err) { setMensagem('❌ Erro de Conexão.'); }
     setLoading(false);
   };
 
@@ -281,12 +251,7 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
     });
 
     const entryHorizontal = chart.addSeries(LineSeries, {
-      color: "#fbbf24",
-      lineWidth: 2,
-      lineStyle: 2,
-      lastValueVisible: false,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false,
+      color: "#fbbf24", lineWidth: 2, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
     });
 
     chartInstance.current = chart;
@@ -297,7 +262,6 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 
     const carregarHistorico = async () => {
       const API_URL = backendHttpBase();
-      
       try {
         const res = await fetch(`${API_URL}/api/historico`);
         if (res.ok) {
@@ -323,16 +287,8 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
               markersSigRef.current = JSON.stringify(sorted);
             }
             if (entryHorizontalSeriesRef.current) {
-              const hData = buildEntryHorizontalLineData(
-                markersRef.current,
-                null,
-                false,
-                0,
-                chartDataMap.current
-              );
-              try {
-                entryHorizontalSeriesRef.current.setData(hData);
-              } catch (_) { /* noop */ }
+              const hData = buildEntryHorizontalLineData(markersRef.current, null, false, 0, chartDataMap.current);
+              try { entryHorizontalSeriesRef.current.setData(hData); } catch (_) {}
             }
           }
         }
@@ -379,17 +335,31 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
 
           if (currentHoverState.current !== param.time) {
             currentHoverState.current = param.time; 
+            
+            // 🛡️ BLINDAGEM DO HOVER (exactTradeLine)
             if (isEntry) {
               const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
               if (exitMarker && exitMarker.time !== param.time) {
                 const exitCandle = chartDataMap.current.get(exitMarker.time);
-                exactTradeLine.setData([{ time: param.time, value: hoveredMarker.price != null ? Number(hoveredMarker.price) : candleData.close }, { time: exitMarker.time, value: exitCandle ? exitCandle.close : candleData.close }]);
+                const v1 = hoveredMarker.price != null ? Number(hoveredMarker.price) : candleData.close;
+                const v2 = exitCandle ? exitCandle.close : candleData.close;
+                if (v1 != null && v2 != null && !Number.isNaN(v1) && !Number.isNaN(v2)) {
+                  exactTradeLine.setData([{ time: param.time, value: v1 }, { time: exitMarker.time, value: v2 }]);
+                } else {
+                  exactTradeLine.setData([]);
+                }
               }
             } else {
               const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
               if (entryMarker && entryMarker.time !== param.time) {
                 const entryCandle = chartDataMap.current.get(entryMarker.time);
-                exactTradeLine.setData([{ time: entryMarker.time, value: entryMarker.price != null ? Number(entryMarker.price) : (entryCandle ? entryCandle.close : candleData.close) }, { time: param.time, value: candleData.close }]);
+                const v1 = entryMarker.price != null ? Number(entryMarker.price) : (entryCandle ? entryCandle.close : candleData.close);
+                const v2 = candleData.close;
+                if (v1 != null && v2 != null && !Number.isNaN(v1) && !Number.isNaN(v2)) {
+                  exactTradeLine.setData([{ time: entryMarker.time, value: v1 }, { time: param.time, value: v2 }]);
+                } else {
+                  exactTradeLine.setData([]);
+                }
               }
             }
           }
@@ -436,28 +406,16 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
       if (typeof seriesInstance.current.setMarkers === "function") {
         seriesInstance.current.setMarkers(prepareChartMarkers(sorted, chartDataMap.current));
       }
-    } catch (e) {
-      console.error("Erro ao aplicar marcadores:", e);
-    }
+    } catch (e) {}
   }, [markersData]);
 
-  /** Linha horizontal âmbar: preço de entrada do candle de entrada até saída ou candle atual. */
   useEffect(() => {
     if (!isDataLoaded.current || !entryHorizontalSeriesRef.current || markersData == null) return;
-    const lineData = buildEntryHorizontalLineData(
-      markersData,
-      liveCandle,
-      inPosition,
-      entryPrice,
-      chartDataMap.current
-    );
+    const lineData = buildEntryHorizontalLineData(markersData, liveCandle, inPosition, entryPrice, chartDataMap.current);
     try {
-      // BLINDAGEM 3: Garantia final antes da injeção no motor visual
       const safeLineData = lineData.filter(p => p.value !== null && p.value !== undefined && !Number.isNaN(p.value));
       entryHorizontalSeriesRef.current.setData(safeLineData);
-    } catch (e) {
-      console.error("Erro linha entrada:", e);
-    }
+    } catch (e) {}
   }, [markersData, liveCandle, inPosition, entryPrice, currentPosition]);
 
   return (
@@ -487,96 +445,47 @@ export default function Dashboard() {
     let cancelled = false;
     let wsConnected = false;
 
-    // --- 1. FALLBACK HTTP SILENCIOSO ---
     const pullState = async () => {
-      // Otimização de Performance: Se o WebSocket está operante, abortamos a chamada HTTP
       if (wsConnected) return; 
-      
       try {
         const res = await fetch(`${httpBase}/api/state`);
         if (res.ok && !cancelled) {
             const text = await res.text();
-            if (!text) {
-                setData({ error: "⚠️ API retornou resposta vazia (0 bytes)" });
-                setWsLive(false);
-                return;
-            }
+            if (!text) { setData({ error: "⚠️ API retornou resposta vazia (0 bytes)" }); setWsLive(false); return; }
             try {
                 const newState = JSON.parse(text);
-                setData(prev => {
-                    // Atualiza apenas se houve mudança real (Delta Check)
-                    if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState;
-                    return prev;
-                });
-            } catch (jsonErr) {
-                setData({ error: `❌ Resposta inválida da API (JSON quebrado): ${jsonErr.message}` });
-                setWsLive(false);
-            }
-        } else if (!cancelled) {
-            setData({ error: `❌ Servidor retornou HTTP ${res.status}. Pode estar iniciando ou offline.` });
-            setWsLive(false);
-        }
-      } catch (err) { 
-        if (!cancelled) {
-            setData({ error: `❌ Erro de rede/CORS: ${err.message}` });
-            setWsLive(false); 
-        }
-      }
+                setData(prev => { if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState; return prev; });
+            } catch (jsonErr) { setData({ error: `❌ Resposta inválida da API (JSON quebrado): ${jsonErr.message}` }); setWsLive(false); }
+        } else if (!cancelled) { setData({ error: `❌ Servidor retornou HTTP ${res.status}. Pode estar iniciando ou offline.` }); setWsLive(false); }
+      } catch (err) { if (!cancelled) { setData({ error: `❌ Erro de rede/CORS: ${err.message}` }); setWsLive(false); } }
     };
 
-    // --- 2. RESTAURAÇÃO DO ELO PERDIDO (WEBSOCKET) ---
     const connectWS = () => {
       if (cancelled) return;
       try {
         ws.current = new WebSocket(wsUrl);
-
-        ws.current.onopen = () => {
-          if (cancelled) return;
-          wsConnected = true;
-          setWsLive(true);
-        };
-
+        ws.current.onopen = () => { if (cancelled) return; wsConnected = true; setWsLive(true); };
         ws.current.onmessage = (event) => {
           if (cancelled) return;
           try {
             const newState = JSON.parse(event.data);
-            setData(prev => {
-                if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState;
-                return prev;
-            });
-          } catch (err) {
-            console.error("[WS] Parse error:", err);
-          }
+            setData(prev => { if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState; return prev; });
+          } catch (err) { console.error("[WS] Parse error:", err); }
         };
-
         ws.current.onclose = () => {
           if (cancelled) return;
           wsConnected = false;
           setWsLive(false);
-          // Tenta reconectar automaticamente em 3 segundos
           reconnectRef.current = setTimeout(connectWS, 3000);
         };
-
-        ws.current.onerror = () => {
-          // Fechamos a conexão no onerror para forçar o onclose e o ciclo de reconexão
-          if (ws.current) ws.current.close();
-        };
-      } catch (err) {
-        console.error("[WS] Falha crítica na inicialização:", err);
-      }
+        ws.current.onerror = () => { if (ws.current) ws.current.close(); };
+      } catch (err) { console.error("[WS] Falha crítica na inicialização:", err); }
     };
 
-    // --- INICIALIZAÇÃO DO MOTOR HÍBRIDO ---
-    pullState(); // 1ª Carga Rápida (HTTP) para não deixar a tela vazia
-    connectWS(); // Engata o tempo real instantaneamente
+    pullState(); 
+    connectWS(); 
+    const poll = setInterval(() => { if (cancelled) return; pullState(); }, 5000); 
 
-    // Ciclo de Segurança: 5 segundos
-    const poll = setInterval(() => {
-      if (cancelled) return;
-      pullState(); // Só fará o fetch de fato se a variável wsConnected for falsa
-    }, 5000); 
-
-    // Cleanup Component Unmount
     return () => {
       cancelled = true;
       clearInterval(poll);
@@ -611,7 +520,6 @@ export default function Dashboard() {
     );
   }
 
-  // ✅ Se chegou aqui, data está OK
   const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
 
   return (
