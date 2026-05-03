@@ -5,12 +5,23 @@ import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweig
 import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database, Github, Linkedin } from 'lucide-react';
 import NewsSentinel from '../components/NewsSentinel';
 
+// 🛡️ BLINDAGEM DE AMBIENTE: Remove formatações Markdown ([url](url)) acidentais
+function sanitizeEnvUrl(urlStr) {
+  if (!urlStr) return "";
+  // Se vier no formato Markdown, extrai apenas o conteúdo dentro dos parênteses
+  const match = urlStr.match(/^\[.*?\]\((.*?)\)$/);
+  const cleanStr = match ? match[1] : urlStr;
+  return cleanStr.trim().replace(/\/$/, ""); // Limpa espaços e a barra final
+}
+
 /** HTTP base do FastAPI (ex.: http://127.0.0.1:10000). Opcional: NEXT_PUBLIC_API_URL */
 function backendHttpBase() {
-  const api = process.env.NEXT_PUBLIC_API_URL;
-  if (api) return api.replace(/\/$/, "");
-  const ws = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:10000/ws";
-  return ws
+  const rawApi = process.env.NEXT_PUBLIC_API_URL;
+  if (rawApi) return sanitizeEnvUrl(rawApi);
+  
+  const rawWs = process.env.NEXT_PUBLIC_WS_URL;
+  const wsUrl = sanitizeEnvUrl(rawWs) || "ws://127.0.0.1:10000/ws";
+  return wsUrl
     .replace(/^wss:\/\//i, "https://")
     .replace(/^ws:\/\//i, "http://")
     .replace(/\/ws\/?$/i, "");
@@ -18,16 +29,18 @@ function backendHttpBase() {
 
 /** WebSocket do backend (termina em /ws). Opcional: NEXT_PUBLIC_WS_URL */
 function backendWsUrl() {
-  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
-  const api = process.env.NEXT_PUBLIC_API_URL;
+  const rawWs = process.env.NEXT_PUBLIC_WS_URL;
+  if (rawWs) return sanitizeEnvUrl(rawWs);
+  
+  const api = backendHttpBase();
   if (api) {
-    const u = api.replace(/\/$/, "");
-    const host = u.includes("://") ? u.split("://")[1] : u;
-    if (/^https:/i.test(u)) return `wss://${host}/ws`;
+    const host = api.includes("://") ? api.split("://")[1] : api;
+    if (/^https:/i.test(api)) return `wss://${host}/ws`;
     return `ws://${host}/ws`;
   }
   return "ws://127.0.0.1:10000/ws";
 }
+
 
 // ==========================================
 // 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
