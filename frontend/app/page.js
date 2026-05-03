@@ -119,16 +119,18 @@ function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPric
     }
   }
 
-  const out = [];
-  segments.forEach((s, i) => {
-    if (i > 0) out.push({ time: segments[i - 1].t1 });
+  // 🛡️ ESCUDO 3: Garante unicidade absoluta de timestamps usando Map
+  const outMap = new Map();
+  segments.forEach((s) => {
     if (s.price != null && !Number.isNaN(s.price)) {
-      out.push({ time: s.t0, value: s.price });
-      out.push({ time: s.t1, value: s.price });
+      if (!outMap.has(s.t0)) outMap.set(s.t0, s.price);
+      if (!outMap.has(s.t1)) outMap.set(s.t1, s.price);
     }
   });
-  
-  return out.filter(point => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
+
+  return Array.from(outMap.entries())
+    .map(([time, value]) => ({ time: Number(time), value }))
+    .sort((a, b) => a.time - b.time);
 }
 
 // ==========================================
@@ -270,7 +272,13 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
             const unique = [...data].sort((a, b) => a.time - b.time).filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
             unique.forEach(candle => chartDataMap.current.set(candle.time, candle));
 
-            const dimmedData = unique.map(candle => {
+            // 🛡️ ESCUDO 1: Filtra velas corrompidas vindas da corretora
+            const safeCandles = unique.filter(c => 
+              c.time != null && c.open != null && c.high != null && c.low != null && c.close != null &&
+              !Number.isNaN(c.open) && !Number.isNaN(c.close)
+            );
+
+            const dimmedData = safeCandles.map(candle => {
               const marker = markersRef.current.find(m => m.time === candle.time);
               if (marker) return { ...candle, color: marker.color, wickColor: marker.color, borderColor: marker.color };
               return candle; 
@@ -336,7 +344,6 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
           if (currentHoverState.current !== param.time) {
             currentHoverState.current = param.time; 
             
-            // 🛡️ BLINDAGEM DO HOVER (exactTradeLine)
             if (isEntry) {
               const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
               if (exitMarker && exitMarker.time !== param.time) {
@@ -392,7 +399,13 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
       let cColor = '#1e293b'; 
       const hasAction = markersRef.current.find(m => m.time === liveCandle.time);
       if (hasAction) cColor = hasAction.color; 
-      try { seriesInstance.current.update({ ...liveCandle, color: cColor, wickColor: cColor, borderColor: cColor }); } catch (e) {}
+      
+      // 🛡️ ESCUDO 2: Impede que vela corrompida entre no gráfico via WebSocket
+      try { 
+        if (liveCandle.open != null && liveCandle.close != null && !Number.isNaN(liveCandle.close)) {
+            seriesInstance.current.update({ ...liveCandle, color: cColor, wickColor: cColor, borderColor: cColor }); 
+        }
+      } catch (e) {}
     }
   }, [liveCandle]);
 
