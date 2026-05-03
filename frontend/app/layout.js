@@ -11,14 +11,17 @@ const geistMono = Geist_Mono({
   subsets: ["latin", "latin-ext"],
 });
 
+// 🛡️ BLINDAGEM DA URL: Limpa formatação Markdown indesejada que a Vercel possa enviar
+let rawSiteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://iatraderpro-nine.vercel.app";
+let cleanSiteUrl = rawSiteUrl.replace(/^\[.*?\]\((.*?)\)$/, '$1').trim();
+
 export const metadata = {
-  // A URL base que o Next.js usará para montar os links das imagens
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://iatraderpro-nine.vercel.app"),
+  // Agora injetamos a URL garantidamente limpa
+  metadataBase: new URL(cleanSiteUrl),
   
   title: "Sniper Engine v3.0 • Neural ONNX Terminal [BTC/USDT]",
   description: "Advanced Algorithmic Execution System | Gemini Market Sentinel.",
   
-  // Efeito Card WhatsApp / LinkedIn / Facebook
   openGraph: {
     title: "IA Trader Pro v3.0 | Sniper Neural Online 🚀",
     description: "Monitoramento em tempo real via ONNX Runtime e Sentinela de Notícias Gemini. Clique para ver a IA em ação no par BTC/USDT.",
@@ -36,7 +39,6 @@ export const metadata = {
     type: 'website',
   },
 
-  // Efeito Card Twitter / X / Discord / Telegram
   twitter: {
     card: 'summary_large_image',
     title: "IA Trader Pro v3.0 | Sniper Neural Online 🚀",
