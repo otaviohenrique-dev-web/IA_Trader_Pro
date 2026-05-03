@@ -97,19 +97,33 @@ function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPric
       segments.push({ t0: ent.time, t1: exit.time, price: px });
     } else {
       let endT = liveCandle?.time != null ? Number(liveCandle.time) : ent.time;
-      if (inPosition && entryPriceState > 0) px = Number(entryPriceState);
+      
+      // BLINDAGEM 1: Fallback seguro para entryPriceState
+      if (inPosition && entryPriceState != null && !Number.isNaN(Number(entryPriceState))) {
+        px = Number(entryPriceState);
+      }
+      
       if (endT <= ent.time) endT = ent.time + 900;
-      segments.push({ t0: ent.time, t1: endT, price: px });
+      
+      // Validação final antes de criar o segmento
+      if (px != null && !Number.isNaN(px)) {
+        segments.push({ t0: ent.time, t1: endT, price: px });
+      }
     }
   }
 
   const out = [];
   segments.forEach((s, i) => {
     if (i > 0) out.push({ time: segments[i - 1].t1 });
-    out.push({ time: s.t0, value: s.price });
-    out.push({ time: s.t1, value: s.price });
+    // Somente injeta pontos se o price for garantidamente válido
+    if (s.price != null && !Number.isNaN(s.price)) {
+      out.push({ time: s.t0, value: s.price });
+      out.push({ time: s.t1, value: s.price });
+    }
   });
-  return out;
+  
+  // BLINDAGEM 2 (O Bypass Definitivo): Remove qualquer ponto que tenha vazado com value inválido
+  return out.filter(point => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
 }
 
 // ==========================================
@@ -425,7 +439,9 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
       chartDataMap.current
     );
     try {
-      entryHorizontalSeriesRef.current.setData(lineData);
+      // BLINDAGEM 3: Garantia final antes da injeção no motor visual
+      const safeLineData = lineData.filter(p => p.value !== null && p.value !== undefined && !Number.isNaN(p.value));
+      entryHorizontalSeriesRef.current.setData(safeLineData);
     } catch (e) {
       console.error("Erro linha entrada:", e);
     }
