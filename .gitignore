@@ -59,7 +59,8 @@ backend/**/*.log
 # ━━ 6. MODELOS DE IA E WEIGHTS (Injetados via Dashboard Vercel) ━━━━━━━━━━━━━
 backend/tensorboard_logs/
 tensorboard_logs/
-backend/models
+backend/models/sniper_pro_gen_6.zip
+backend/models/sniper_pro_gen_7.zip
 backend/models/*.zip
 backend/models/*.pth
 backend/models/*.h5
