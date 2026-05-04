@@ -50,7 +50,7 @@ SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m' 
 # 🚀 O ALVO AGORA É O ARQUIVO ONNX
 MODEL_PATH = "models/sniper_pro_gen_7.onnx" 
-START_TIME = time.time()
+
 FEE_RATE = 0.0010 
 STOP_LOSS_PCT = -0.010    
 TAKE_PROFIT_PCT = +0.020 
@@ -105,6 +105,7 @@ state = {
     "current_position": 0,
     "balance": balance, 
     "status": "Reiniciando o sistema...",
+    "started_at": time.time(),
     "uptime": "00:00:00",
     "last_candle": {},
     "chart_data": [],
@@ -122,6 +123,7 @@ state = {
         "status": "INICIALIZANDO...",
         "sentiment_score": 0.0,
         "risk_level": "BAIXO",
+        "reason": "Aguardando primeira leitura do mercado...",
         "last_headlines": []
     },
     "performance": {
@@ -151,10 +153,13 @@ def update_safe_state():
     global global_safe_state_str
     try:
         safe_state = clean_nans(copy.deepcopy(state))
-        if safe_state.get("markers") and len(safe_state["markers"]) > 50:
-            safe_state["markers"] = safe_state["markers"][-50:]
-        if safe_state.get("order_book") and len(safe_state["order_book"]) > 30:
-            safe_state["order_book"] = safe_state["order_book"][:30]
+        
+        # 🚀 SINCRONIZAÇÃO DE ARRAYS (60 itens = 30 trades completos na interface)
+        if safe_state.get("markers") and len(safe_state["markers"]) > 60:
+            safe_state["markers"] = safe_state["markers"][-60:]
+        if safe_state.get("order_book") and len(safe_state["order_book"]) > 60:
+            safe_state["order_book"] = safe_state["order_book"][:60]
+            
         global_safe_state_str = json.dumps(safe_state)
     except Exception as e:
         print(f">>> ❌ Erro ao sanitizar estado: {e}")
@@ -193,9 +198,6 @@ def load_brain(path=MODEL_PATH):
     finally:
         gc.collect()
 
-def get_uptime():
-    seconds = int(time.time() - START_TIME)
-    return time.strftime('%H:%M:%S', time.gmtime(seconds))
 
 # --- INICIALIZAÇÃO DO CLIENTE GEMINI ---
 from google import genai
@@ -249,6 +251,7 @@ async def analyst_market_loop():
                     "status": "SAFE",
                     "sentiment_score": 0.0,
                     "risk_level": "MODO TÉCNICO",
+                    "reason": "Acesso a notícias bloqueado. IA operando apenas com Análise Técnica (Gráficos).", # 🚀 INJETADO AQUI
                     "last_headlines": ["⚠️ ALERTA: API DE NOTÍCIAS ESGOTADA - TRABALHANDO 100% VIA GRÁFICOS (TA) •"]
                 })
                 kill_switch_active = False
@@ -260,12 +263,13 @@ async def analyst_market_loop():
                 "status": analysis["status"],
                 "sentiment_score": analysis["score"],
                 "risk_level": analysis["status"],
+                "reason": analysis.get("reason", "Análise concluída sem justificativa explícita."), # 🚀 INJETADO AQUI (Com fallback de segurança)
                 "last_headlines": headlines if headlines else ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]
             })
             
             if analysis["status"] == "SAFE": kill_switch_active = False
             update_safe_state() 
-            await asyncio.sleep(3600) 
+            await asyncio.sleep(3600)
             
         except Exception as e:
             await asyncio.sleep(60)
@@ -483,9 +487,14 @@ async def sniper_loop():
                             state["status"] = "🔍 BUSCANDO OPORTUNIDADE..."
 
                 if target_pos != position:
+                    # 1. LÓGICA DE FECHAMENTO (Acerto do PnL sem bitributação)
                     if position != 0:
-                        pnl = (balance * ((current_price - entry_price)/entry_price)) if position == 1 else (balance * -((current_price - entry_price)/entry_price))
-                        balance += (pnl - (balance * FEE_RATE))
+                        # Calcula a variação percentual exata do movimento
+                        change_pct = (current_price - entry_price) / entry_price if position == 1 else (entry_price - current_price) / entry_price
+                        pnl = balance * change_pct
+                        
+                        # Atualiza o saldo SEM subtrair taxa novamente
+                        balance += pnl
                         
                         state["markers"].append({
                             "time": int(last_row['timestamp'].timestamp()), "position": "aboveBar",
@@ -502,8 +511,12 @@ async def sniper_loop():
                         else: losses += 1
                         position = 0 
 
+                    # 2. LÓGICA DE ABERTURA (Cobrança Única de Taxa)
                     if target_pos != 0 and not warming_up:
-                        balance -= (balance * FEE_RATE)
+                        # Subtrai a taxa exata na ABERTURA da posição
+                        fee_amount = balance * FEE_RATE
+                        balance -= fee_amount
+                        
                         entry_price = current_price
                         last_entry_ts = int(time.time()) 
                         position = target_pos
@@ -516,7 +529,7 @@ async def sniper_loop():
                         })
                         
                         lado_abertura = "compra (long)" if position == 1 else "venda (short)"
-                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Abriu {lado_abertura} a US$ {current_price:.2f}"})
+                        state["order_book"].insert(0, {"text": f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Abriu {lado_abertura} a US$ {current_price:.2f} (Taxa: US$ {fee_amount:.2f})"})
 
                 try:
                     if wins + losses > 0:
@@ -531,11 +544,15 @@ async def sniper_loop():
                     "adaptation": {**state["adaptation"], "wins": wins, "losses": losses, "current_win_rate": current_win_rate}
                 })
 
-            state["uptime"] = get_uptime()
             if 'last_row' in locals():
                 state["last_candle"] = {
-                    "time": int(last_row['timestamp'].timestamp()), "open": last_row['open'], 
-                    "high": last_row['high'], "low": last_row['low'], "close": last_row['close']
+                    "time": int(last_row['timestamp'].timestamp()), 
+                    "open": last_row['open'], 
+                    "high": last_row['high'], 
+                    "low": last_row['low'], 
+                    "close": last_row['close'],
+                    "rsi": last_row['rsi'],          # 🚀 INJETADO: Telemetria de Força Relativa
+                    "bb_width": last_row['bb_width'] # 🚀 INJETADO: Telemetria de Volatilidade
                 }
             
             update_safe_state() 
@@ -553,20 +570,44 @@ async def sniper_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(">>> 🚀 FastAPI iniciando lifespan...")
-    try:
-        async def heartbeat_task():
-            while True:
-                state["uptime"] = get_uptime()
+    
+    # 🛡️ 1. Guarda-costas contra o Garbage Collector do Python
+    background_tasks = set()
+    
+    async def heartbeat_task():
+        while True:
+            try:
+                # 🚀 Cálculo blindado usando a memória profunda do state
+                seconds = int(time.time() - state["started_at"])
+                state["uptime"] = time.strftime('%H:%M:%S', time.gmtime(seconds))
+                
                 update_safe_state() 
+            except Exception as e:
+                # Impede que o loop morra se houver uma falha de conversão/JSON
+                print(f">>> ⚠️ Erro ignorado no heartbeat: {e}")
+            finally:
+                # Garante que sempre vai dormir 1 segundo, mesmo dando erro
                 await asyncio.sleep(1.0)
+    
+    try:
+        # 🛡️ 2. Atribui a variáveis para criar referência na memória
+        t1 = asyncio.create_task(heartbeat_task())
+        t2 = asyncio.create_task(sniper_loop())
+        t3 = asyncio.create_task(analyst_market_loop())
         
-        asyncio.create_task(heartbeat_task())
-        asyncio.create_task(sniper_loop())
-        asyncio.create_task(analyst_market_loop())
+        # Salva no set para o Python nunca deletar
+        background_tasks.update({t1, t2, t3})
+        
+        # 🚀 3. O servidor entra em status "LIVE" aqui
+        yield
         
     except Exception as e:
-        print(f">>> ❌ Erro no startup: {e}")
-    yield
+        print(f">>> ❌ Erro crítico no startup: {e}")
+    finally:
+        # 🛡️ 4. Shutdown Limpo: Cancela as tarefas se o Render reiniciar a máquina
+        print(">>> 🛑 Servidor desligando. Cancelando tarefas em background...")
+        for task in background_tasks:
+            task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
