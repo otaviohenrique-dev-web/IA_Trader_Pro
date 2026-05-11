@@ -69,7 +69,6 @@ const calculateZigZag = (data, thresholdPct = 0.5) => {
   }
   pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
   
-  // 🛡️ BLINDAGEM: Filtra topos/fundos corrompidos antes de injetar na LineSeries
   return pivots
     .filter((v, i, a) => v.value != null && !Number.isNaN(v.value) && a.findIndex(t => t.time === v.time) === i)
     .sort((a, b) => a.time - b.time);
@@ -119,7 +118,6 @@ function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPric
     }
   }
 
-  // 🛡️ ESCUDO 3: Garante unicidade absoluta de timestamps usando Map
   const outMap = new Map();
   segments.forEach((s) => {
     if (s.price != null && !Number.isNaN(s.price)) {
@@ -272,7 +270,6 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
             const unique = [...data].sort((a, b) => a.time - b.time).filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
             unique.forEach(candle => chartDataMap.current.set(candle.time, candle));
 
-            // 🛡️ ESCUDO 1: Filtra velas corrompidas vindas da corretora
             const safeCandles = unique.filter(c => 
               c.time != null && c.open != null && c.high != null && c.low != null && c.close != null &&
               !Number.isNaN(c.open) && !Number.isNaN(c.close)
@@ -400,7 +397,6 @@ function TradingChart({ liveCandle, markersData, inPosition, entryPrice, current
       const hasAction = markersRef.current.find(m => m.time === liveCandle.time);
       if (hasAction) cColor = hasAction.color; 
       
-      // 🛡️ ESCUDO 2: Impede que vela corrompida entre no gráfico via WebSocket
       try { 
         if (liveCandle.open != null && liveCandle.close != null && !Number.isNaN(liveCandle.close)) {
             seriesInstance.current.update({ ...liveCandle, color: cColor, wickColor: cColor, borderColor: cColor }); 
@@ -535,6 +531,13 @@ export default function Dashboard() {
 
   const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
 
+  // 🦅 DADOS DA VISÃO DE ÁGUIA (MACRO 4H)
+  const currentPrice = data?.last_candle?.close || 0;
+  // Fallback inteligente: Procura no objeto macro_trend ou nas propriedades da last_candle
+  const macroEma50 = data?.macro_trend?.ema50 || data?.macro_trend?.ema50_4h || data?.last_candle?.ema50_4h || 0;
+  const macroEma200 = data?.macro_trend?.ema200 || data?.macro_trend?.ema200_4h || data?.last_candle?.ema200_4h || 0;
+  const isBullish = currentPrice > macroEma200;
+
   return (
     <div className="min-h-screen bg-[#0f172a] p-6 text-slate-100 font-sans">
       <header className="flex justify-between items-center mb-6 border-b border-slate-700/50 pb-4">
@@ -622,18 +625,18 @@ export default function Dashboard() {
         {/* News */}
         <NewsSentinel data={data.news_agent} />
 
-        {/* Protocolo */}
+        {/* Protocolo (Atualizado com Título Fixo) */}
         <div className="bg-linear-to-br from-purple-900/40 to-slate-900 p-5 rounded-xl border border-purple-500/30 shadow-lg flex flex-col justify-between min-h-35">
           <div className="text-purple-300 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
             <Brain size={16}/> Protocolo
           </div>
           <div className="mt-auto">
             <div className="text-3xl lg:text-4xl font-black font-mono text-white">
-              GEN {data.adaptation.generation}
+              SNIPER PRO G8
             </div>
             <div className="mt-2 flex flex-col gap-1">
               <div className="text-sm lg:text-base text-green-400 font-mono font-bold">
-                Acertos Reais: {data.adaptation.current_win_rate}%
+                Acertos Reais: {data.adaptation?.current_win_rate || "0"}%
               </div>
               <div className="text-xs text-purple-400 font-mono font-semibold tracking-wide border-t border-purple-500/30 pt-1 mt-1">
                 Status: Motor ONNX Compilado
@@ -644,7 +647,34 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg">
+        {/* Bloco do Gráfico com a HUD Macro embutida no topo */}
+        <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg flex flex-col">
+          
+          {/* 🦅 HUD DA VISÃO DE ÁGUIA (SEMÁFORO MACRO) */}
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-4 border-b border-slate-700/60 pb-3 gap-3">
+            <h2 className="text-xs font-black flex items-center gap-2 uppercase tracking-widest text-slate-300 shrink-0">
+              <Zap size={16} className="text-blue-500" /> Gráfico Tático (15m)
+            </h2>
+            
+            {macroEma200 > 0 ? (
+              <div className="flex items-center gap-3 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-slate-700/80 w-full md:w-auto">
+                <div className="flex items-center gap-2">
+                  <CircleDot size={12} className={isBullish ? 'text-green-500 animate-pulse' : 'text-red-500 animate-pulse'} />
+                  <span className={`text-[10px] font-bold uppercase tracking-widest ${isBullish ? 'text-green-400' : 'text-red-400'}`}>
+                    Macro: {isBullish ? 'Alta (Bull)' : 'Baixa (Bear)'}
+                  </span>
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 border-l border-slate-700 pl-3 ml-1 hidden sm:block">
+                  EMA50(4H): <span className="text-white">${macroEma50.toFixed(2)}</span> <span className="mx-1 text-slate-600">|</span> EMA200(4H): <span className="text-white">${macroEma200.toFixed(2)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest animate-pulse">
+                Sincronizando Visão Macro...
+              </div>
+            )}
+          </div>
+
           <TradingChart 
             liveCandle={data.last_candle} 
             markersData={data.markers} 
@@ -653,6 +683,8 @@ export default function Dashboard() {
             currentPosition={data.current_position} 
           />
         </div>
+        
+        {/* Livro de Ações */}
         <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-120.5 flex flex-col shadow-lg custom-scrollbar">
           <h2 className="text-xs font-black mb-4 flex items-center gap-2 border-b border-slate-700 pb-2 uppercase tracking-widest shrink-0">
             <List size={16}/> Livro de Ações

@@ -49,7 +49,7 @@ def clean_nans(obj):
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m' 
 # 🚀 O ALVO AGORA É O ARQUIVO ONNX
-MODEL_PATH = "models/sniper_pro_gen_7.onnx" 
+MODEL_PATH = "models/sniper_pro_gen_8.onnx" 
 
 FEE_RATE = 0.0010 
 STOP_LOSS_PCT = -0.010    
@@ -139,7 +139,7 @@ onnx_session = None
 exchange = None
 # A memória LSTM agora é armazenada como uma tupla de arrays numpy (H e C)
 lstm_states = None 
-feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct']
+feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct', 'dist_ema50_4h', 'dist_ema200_4h']
 last_analysis_time = 0
 cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
 # Cliente global para websockets
@@ -353,11 +353,34 @@ async def sniper_loop():
             now_ts = time.time()
             if now_ts - last_fetch_ts > 60 or last_fetch_ts == 0:
                 try:
-                    ohlcv = await asyncio.wait_for(exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=250), timeout=15.0)
+                    # 🚀 Busca Paralela: 15m e 4H
+                    ohlcv, ohlcv_4h = await asyncio.gather(
+                        exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=250),
+                        exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=200)
+                    )
                     
-                    def process_indicators(ohlcv_data):
+                    def process_indicators(ohlcv_data, ohlcv_data_macro):
+                        # Processa o 4H primeiro para pegar as EMAs macro
+                        df_macro = pd.DataFrame(ohlcv_data_macro, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        ema50_macro = ta.ema(df_macro['close'], length=50)
+                        ema200_macro = ta.ema(df_macro['close'], length=200)
+                        
+                        # Extrai apenas os últimos valores válidos da macro
+                        last_ema50_4h = ema50_macro.dropna().iloc[-1]
+                        last_ema200_4h = ema200_macro.dropna().iloc[-1]
+
+                        # Processa o 15m normal
                         df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                        
+                        # 🚀 Injeta as distâncias macro na base de 15m
+                        df['dist_ema50_4h'] = (df['close'] - last_ema50_4h) / last_ema50_4h
+                        df['dist_ema200_4h'] = (df['close'] - last_ema200_4h) / last_ema200_4h
+                        
+                        # 🚀 Ponte para o Front-end (Valores Brutos)
+                        df['ema50_4h'] = last_ema50_4h
+                        df['ema200_4h'] = last_ema200_4h
+                        
                         df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
                         df['rsi'] = ta.rsi(df['close'], length=14)
                         df['rsi_slope'] = df['rsi'].diff()
@@ -370,9 +393,7 @@ async def sniper_loop():
                         
                         bb = ta.bbands(df['close'], length=20, std=2)
                         if bb is not None and not bb.empty:
-                            upper_col = [c for c in bb.columns if c.startswith('BBU')][0]
-                            lower_col = [c for c in bb.columns if c.startswith('BBL')][0]
-                            width_col = [c for c in bb.columns if c.startswith('BBB')][0]
+                            upper_col, lower_col, width_col = [c for c in bb.columns if c.startswith('BBU')][0], [c for c in bb.columns if c.startswith('BBL')][0], [c for c in bb.columns if c.startswith('BBB')][0]
                             df['bb_pband'] = (df['close'] - bb[lower_col]) / (bb[upper_col] - bb[lower_col])
                             df['bb_width'] = bb[width_col]
                         else: df['bb_pband'], df['bb_width'] = 0.0, 0.0
@@ -386,7 +407,8 @@ async def sniper_loop():
                         
                         return df, df.dropna().copy()
                     
-                    df, df_clean = await asyncio.to_thread(process_indicators, ohlcv)
+                    # Chama a thread com os dois conjuntos de dados
+                    df, df_clean = await asyncio.to_thread(process_indicators, ohlcv, ohlcv_4h)
                     
                     last_fetch_ts = now_ts
                     # print(f">>> ✅ Indicadores calculados ({len(df_clean)} velas limpas)")
@@ -423,13 +445,13 @@ async def sniper_loop():
                     if onnx_session is not None:
                         try:
                             # 1. Preparar a matriz de observação (Batch de 1)
-                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 9)
+                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 11) # 🚀 De 9 para 11
                             
                             # 2. Gestão Dinâmica da Memória LSTM
                             if lstm_states is None:
-                                # O ONNX exige a forma exata se os estados estiverem vazios: (1, 1, 64)
-                                h_state = np.zeros((1, 1, 64), dtype=np.float32)
-                                c_state = np.zeros((1, 1, 64), dtype=np.float32)
+                                # O ONNX exige a forma exata (Gen 8 possui 256 de memória)
+                                h_state = np.zeros((1, 1, 256), dtype=np.float32) 
+                                c_state = np.zeros((1, 1, 256), dtype=np.float32) 
                             else:
                                 h_state, c_state = lstm_states
                                 
@@ -551,8 +573,10 @@ async def sniper_loop():
                     "high": last_row['high'], 
                     "low": last_row['low'], 
                     "close": last_row['close'],
-                    "rsi": last_row['rsi'],          # 🚀 INJETADO: Telemetria de Força Relativa
-                    "bb_width": last_row['bb_width'] # 🚀 INJETADO: Telemetria de Volatilidade
+                    "rsi": last_row['rsi'],          
+                    "bb_width": last_row['bb_width'],
+                    "ema50_4h": last_row['ema50_4h'],   # 🚀 LED Front-end
+                    "ema200_4h": last_row['ema200_4h']  # 🚀 Semáforo Macro Front-end
                 }
             
             update_safe_state() 
@@ -665,7 +689,7 @@ async def get_historico():
             await temp_ex.close()
             return [{"time": int(r[0]/1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
             
-        ohlcv = await exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=1000)
+        ohlcv = await exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=250) # 🚀 Folga de 50 velas
         return [{"time": int(r[0]/1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
     except Exception as e:
         return []
