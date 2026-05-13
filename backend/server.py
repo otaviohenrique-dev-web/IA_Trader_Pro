@@ -49,7 +49,7 @@ def clean_nans(obj):
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m' 
 # 🚀 O ALVO AGORA É O ARQUIVO ONNX
-MODEL_PATH = "models/sniper_pro_gen_8.onnx" 
+MODEL_PATH = "models/sniper_pro_gen_11.onnx" 
 
 FEE_RATE = 0.0010 
 STOP_LOSS_PCT = -0.010    
@@ -139,7 +139,10 @@ onnx_session = None
 exchange = None
 # A memória LSTM agora é armazenada como uma tupla de arrays numpy (H e C)
 lstm_states = None 
-feature_cols = ['log_ret', 'rsi', 'rsi_slope', 'macd_diff', 'bb_pband', 'bb_width', 'dist_ema50', 'dist_ema200', 'atr_pct', 'dist_ema50_4h', 'dist_ema200_4h']
+
+
+# 🚀 A NOVA DIETA INSTITUCIONAL DE SENSORES
+feature_cols = ['log_ret', 'atr_pct', 'rsi', 'bb_pband', 'bb_width_pct', 'dist_ema50_4h', 'dist_ema200_4h', 'dist_vwap', 'obv_slope_pct', 'adx']
 last_analysis_time = 0
 cached_analysis = {"score": 50, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
 # Cliente global para websockets
@@ -360,50 +363,55 @@ async def sniper_loop():
                     )
                     
                     def process_indicators(ohlcv_data, ohlcv_data_macro):
-                        # Processa o 4H primeiro para pegar as EMAs macro
+                        # --- 1. MACRO 4H ---
                         df_macro = pd.DataFrame(ohlcv_data_macro, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         ema50_macro = ta.ema(df_macro['close'], length=50)
                         ema200_macro = ta.ema(df_macro['close'], length=200)
-                        
-                        # Extrai apenas os últimos valores válidos da macro
                         last_ema50_4h = ema50_macro.dropna().iloc[-1]
                         last_ema200_4h = ema200_macro.dropna().iloc[-1]
 
-                        # Processa o 15m normal
+                        # --- 2. MICRO 15M ---
                         df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                         
-                        # 🚀 Injeta as distâncias macro na base de 15m
-                        df['dist_ema50_4h'] = (df['close'] - last_ema50_4h) / last_ema50_4h
-                        df['dist_ema200_4h'] = (df['close'] - last_ema200_4h) / last_ema200_4h
+                        # O VWAP exige que o index seja datetime
+                        df.set_index('timestamp', inplace=True)
                         
-                        # 🚀 Ponte para o Front-end (Valores Brutos)
+                        # 🚀 INJEÇÃO GEN 11: Multiplicador 100x nas distâncias Macro
+                        df['dist_ema50_4h'] = ((df['close'] - last_ema50_4h) / last_ema50_4h) * 100.0
+                        df['dist_ema200_4h'] = ((df['close'] - last_ema200_4h) / last_ema200_4h) * 100.0
+                        
+                        # Ponte para o Front-end
                         df['ema50_4h'] = last_ema50_4h
                         df['ema200_4h'] = last_ema200_4h
                         
-                        df['log_ret'] = np.log(df['close'] / df['close'].shift(1))
-                        df['rsi'] = ta.rsi(df['close'], length=14)
-                        df['rsi_slope'] = df['rsi'].diff()
+                        # 🚀 INJEÇÃO GEN 11: Multiplicador 100x no log return
+                        df['log_ret'] = np.log(df['close'] / df['close'].shift(1)) * 100.0
                         
-                        macd = ta.macd(df['close'])
-                        if macd is not None and not macd.empty:
-                            macd_col = [c for c in macd.columns if c.startswith('MACDh') or c.startswith('MACDH')][0]
-                            df['macd_diff'] = macd[macd_col]
-                        else: df['macd_diff'] = 0.0
+                        # 🚀 INJEÇÃO GEN 11: RSI normalizado (dividido por 100)
+                        df['rsi'] = ta.rsi(df['close'], length=14) / 100.0
                         
                         bb = ta.bbands(df['close'], length=20, std=2)
                         if bb is not None and not bb.empty:
                             upper_col, lower_col, width_col = [c for c in bb.columns if c.startswith('BBU')][0], [c for c in bb.columns if c.startswith('BBL')][0], [c for c in bb.columns if c.startswith('BBB')][0]
                             df['bb_pband'] = (df['close'] - bb[lower_col]) / (bb[upper_col] - bb[lower_col])
-                            df['bb_width'] = bb[width_col]
-                        else: df['bb_pband'], df['bb_width'] = 0.0, 0.0
+                            df['bb_width_pct'] = bb[width_col] / df['close'] 
+                        else: df['bb_pband'], df['bb_width_pct'] = 0.0, 0.0
                         
-                        df['ema50'] = ta.ema(df['close'], length=50)
-                        df['ema200'] = ta.ema(df['close'], length=200)
-                        df['dist_ema50'] = (df['close'] - df['ema50']) / df['ema50']
-                        df['dist_ema200'] = (df['close'] - df['ema200']) / df['ema200']
                         df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
                         df['atr_pct'] = df['atr'] / df['close']
+
+                        # 🚀 DADOS ORTOGONAIS (INJEÇÃO GEN 11: * 100.0 E np.clip)
+                        df['vwap'] = ta.vwap(df['high'], df['low'], df['close'], df['volume'])
+                        df['dist_vwap'] = ((df['close'] - df['vwap']) / df['vwap']) * 100.0
+
+                        df['obv'] = ta.obv(df['close'], df['volume'])
+                        df['obv_ema'] = ta.ema(df['obv'], length=10)
+                        # O np.clip protege a Gen 11 de anomalias de volume
+                        df['obv_slope_pct'] = np.clip((df['obv'] - df['obv_ema']) / (np.abs(df['obv_ema']) + 1e-8), -2.0, 2.0)
+
+                        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+                        df['adx'] = adx_df['ADX_14'] / 100.0
                         
                         return df, df.dropna().copy()
                     
@@ -445,8 +453,8 @@ async def sniper_loop():
                     if onnx_session is not None:
                         try:
                             # 1. Preparar a matriz de observação (Batch de 1)
-                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 11) # 🚀 De 9 para 11
-                            
+                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 10) # 🚀 De 11 para 10
+
                             # 2. Gestão Dinâmica da Memória LSTM
                             if lstm_states is None:
                                 # O ONNX exige a forma exata (Gen 8 possui 256 de memória)
