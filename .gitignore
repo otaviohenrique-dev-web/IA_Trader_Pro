@@ -59,13 +59,16 @@ backend/**/*.log
 # ━━ 6. MODELOS DE IA E WEIGHTS (Injetados via Dashboard Vercel) ━━━━━━━━━━━━━
 backend/tensorboard_logs/
 tensorboard_logs/
-backend/models/sniper_pro_gen_6.zip
-backend/models/sniper_pro_gen_7.zip
 backend/models/*.zip
 backend/models/*.pth
 backend/models/*.h5
 backend/models/*.pt
 backend/models/*.onnx.data
+backend/models/*.onnx
+
+# 👇 EXCEÇÃO DE OURO: Mantém APENAS o Cérebro da Gen 11 👇
+!backend/models/sniper_pro_gen_11.onnx
+
 backend/server.py.bkp
 frontend/app/pillow.py
 frontend/app/generate_og.py
@@ -75,6 +78,8 @@ runs/
 backend/envs/
 backend/dojo.py
 backend/coletor.py
+backend/coletor_backtest.py
+backend/backtest.py
 backend/test_port_*.py
 reconstruct_gen_*.py
 train_*.py
@@ -121,7 +126,7 @@ nosetests.xml
 *.swn
 .env.bak
 
-# ━━ 13. DEPENDÊNCIAS LOCK (Opcionais, manter ou remover conforme necessário)
+# ━━ 13. DEPENDÊNCIAS LOCK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # package-lock.json  # Descomente para ignorar locks de dependências
 # poetry.lock
 # pipenv.lock
