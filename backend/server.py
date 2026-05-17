@@ -449,26 +449,26 @@ async def sniper_loop():
                         state["status"] = "📊 AGUARDANDO SINAL..."
 
                 else:
-                    # 🚀 REFATORAÇÃO: IA PREDIÇÃO (ONNX RUNTIME VIA INFERÊNCIA)
+                    # 🚀 REFATORAÇÃO: IA PREDIÇÃO (ADAPTADOR DINÂMICO ONNX)
                     if onnx_session is not None:
                         try:
-                            # 1. Preparar a matriz de observação (Batch de 1)
-                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 10) # 🚀 De 11 para 10
+                            # 1. Matriz 1x10 cravada
+                            obs_array = last_row[feature_cols].values.astype(np.float32).reshape(1, 10) 
 
-                            # 2. Gestão Dinâmica da Memória LSTM
-                            if lstm_states is None:
-                                # O ONNX exige a forma exata (Gen 8 possui 256 de memória)
-                                h_state = np.zeros((1, 1, 256), dtype=np.float32) 
-                                c_state = np.zeros((1, 1, 256), dtype=np.float32) 
-                            else:
-                                h_state, c_state = lstm_states
-                                
-                            # 3. Empacotar dicionário exato exigido pelo modelo compilado
-                            ort_inputs = {
-                                "obs": obs_array,
-                                "lstm_states_h": h_state,
-                                "lstm_states_c": c_state
-                            }
+                            # 2. Verifica as chaves exigidas pelo ONNX
+                            expected_inputs = [i.name for i in onnx_session.get_inputs()]
+                            ort_inputs = {"obs": obs_array}
+                            
+                            # 3. Só constrói e injeta LSTM se o modelo pedir
+                            if "lstm_states_h" in expected_inputs or "lstm_states_c" in expected_inputs:
+                                if lstm_states is None:
+                                    h_state = np.zeros((1, 1, 256), dtype=np.float32) 
+                                    c_state = np.zeros((1, 1, 256), dtype=np.float32) 
+                                else:
+                                    h_state, c_state = lstm_states
+                                    
+                                if "lstm_states_h" in expected_inputs: ort_inputs["lstm_states_h"] = h_state
+                                if "lstm_states_c" in expected_inputs: ort_inputs["lstm_states_c"] = c_state
                             
                             # 4. Executar o Grafo Neural
                             def run_onnx_inference(sess, inputs):
@@ -476,19 +476,17 @@ async def sniper_loop():
                                 
                             ort_outs = await asyncio.to_thread(run_onnx_inference, onnx_session, ort_inputs)
                             
-                            # 5. Extrair resultados: O PyTorch 2.1 pode cuspir múltiplos arrays,
-                            # a ação é sempre o índice [0], e a LSTM costuma estar oculta nos seguintes
                             action_array = ort_outs[0]
                             act_idx = int(action_array.item()) if action_array.size == 1 else int(np.argmax(action_array))
                             
-                            # Atualizamos a memória apenas se o ONNX tiver retornado novos estados (Opset 17)
+                            # 5. Atualiza memória apenas se o ONNX devolver estados
                             if len(ort_outs) >= 3:
                                 lstm_states = (ort_outs[1], ort_outs[2])
                                 
                         except Exception as trace_e:
                             print(f">>> ❌ Falha na Inferência ONNX: {trace_e}")
                             act_idx = 0
-                            lstm_states = None # Reset de memória por segurança
+                            lstm_states = None 
                     else:
                         act_idx = 0
                         state["status"] = "⏳ MOTOR OFFLINE..."
