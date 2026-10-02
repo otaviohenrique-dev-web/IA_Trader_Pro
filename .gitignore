@@ -89,6 +89,7 @@ backend/mfeatures.py
 backend/mf4h.py
 backend/mf1d.py
 backend/arena.py
+backend/null_test.py
 backend/deriv.py
 backend/coletor_deriv.py
 backend/data/arena/
