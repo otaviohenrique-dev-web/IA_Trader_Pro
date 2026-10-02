@@ -90,6 +90,7 @@ backend/portfolio.py
 backend/walkforward.py
 backend/coletor_multi.py
 backend/data/multi/
+backend/_legado/
 backend/test_port_*.py
 reconstruct_gen_*.py
 train_*.py
