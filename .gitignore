@@ -69,6 +69,10 @@ backend/models/*.onnx
 # 👇 EXCEÇÃO DE OURO: Mantém APENAS o Cérebro da Gen atual 👇
 !backend/models/sniper_pro_gen_27.onnx
 
+# stats de normalização: só a do modelo em produção
+backend/models/*.stats.json
+!backend/models/sniper_pro_gen_27.stats.json
+
 backend/server.py.bkp
 frontend/app/pillow.py
 frontend/app/generate_og.py
@@ -80,6 +84,12 @@ backend/dojo.py
 backend/coletor.py
 backend/coletor_backtest.py
 backend/backtest.py
+backend/dojo_supervised.py
+backend/mfeatures.py
+backend/portfolio.py
+backend/walkforward.py
+backend/coletor_multi.py
+backend/data/multi/
 backend/test_port_*.py
 reconstruct_gen_*.py
 train_*.py

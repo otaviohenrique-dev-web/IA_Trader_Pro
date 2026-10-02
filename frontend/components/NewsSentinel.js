@@ -12,9 +12,9 @@ const TONES = {
 };
 
 const IMPACT = {
-  SAFE: "Sem bloqueio: o robô pode operar normalmente.",
-  CAUTION: "Novas entradas pausadas até o risco diminuir.",
-  DANGER: "Novas entradas pausadas. Risco macro extremo.",
+  SAFE: "Modo observação: mostra o contexto, sem interferir no robô.",
+  CAUTION: "Atenção registrada. Em observação: não bloqueia entradas (medindo se ajuda).",
+  DANGER: "Risco alto registrado. Em observação: não bloqueia entradas (medindo se ajuda).",
   "MODO TÉCNICO": "Sem acesso a notícias: operando só com análise técnica.",
 };
 
@@ -36,7 +36,7 @@ export default function NewsSentinel({ data }) {
           </span>
           <div>
             <h3 className="text-sm font-bold leading-tight text-white">Analista de Notícias</h3>
-            <p className="text-[10px] text-slate-500">Leitura de risco macro por IA · atualiza a cada hora</p>
+            <p className="text-[10px] text-slate-500">Leitura de risco macro por IA · <span className="font-semibold text-violet">modo observação</span></p>
           </div>
         </div>
         <span className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold ${tone.ring} ${tone.chip} ${tone.text}`}>

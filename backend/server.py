@@ -57,6 +57,8 @@ CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", 0.5))
 DAILY_LOSS_LIMIT = float(os.environ.get("DAILY_LOSS_LIMIT", -0.03))   # bloqueia novas entradas no dia
 STARTING_BALANCE = 100.0
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
+BREAKER_MOVE = float(os.environ.get("BREAKER_MOVE", 0.03))        # |variação de 1h| >= 3% pausa novas entradas
+BREAKER_PAUSE_S = int(float(os.environ.get("BREAKER_PAUSE_H", 2)) * 3600)
 
 CRYPTOCOMPARE_KEY = os.environ.get("CRYPTOCOMPARE_API_KEY") or os.environ.get("CRYPTOCOMPARE_KEY") or ""
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
@@ -94,6 +96,10 @@ tr = {
     "wins": 0, "losses": 0, "gross_win": 0.0, "gross_loss": 0.0,
     "cooldown": 0, "day": "", "day_start_balance": STARTING_BALANCE, "trades_today": 0,
     "peak": STARTING_BALANCE, "max_dd": 0.0, "last_bar_ts": 0,
+    "breaker_until": 0.0,          # freio de volatilidade: sem novas entradas até este instante (epoch s)
+    "news_at_open": "SAFE", "open_ts": 0,
+    "trade_log": [],               # últimos trades com o status do Analista no momento da entrada (modo sombra)
+    "news_events": [],             # leituras do Analista que teriam bloqueado entradas
 }
 
 state = {
@@ -321,6 +327,11 @@ async def analyst_market_loop():
                     "status": a["status"], "sentiment_score": a["score"], "risk_level": a["status"],
                     "reason": a.get("reason", "Análise concluída sem justificativa explícita."),
                     "last_headlines": headlines or ["SISTEMA EM MONITORAMENTO: AGUARDANDO NOVOS EVENTOS •"]})
+            na = state["news_agent"]
+            na["mode"] = "observação"
+            if na["status"] in ("CAUTION", "DANGER"):
+                tr["news_events"] = (tr["news_events"] + [{"ts": int(time.time()), "status": na["status"],
+                                                           "score": na["sentiment_score"]}])[-100:]
             update_safe_state()
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
@@ -352,6 +363,9 @@ def close_position(price, bar_ts_ms, reason):
     else:
         tr["losses"] += 1
         tr["gross_loss"] += -net
+    tr["trade_log"] = (tr["trade_log"] + [{
+        "open_ts": tr["open_ts"], "close_ts": int(time.time()), "side": pos, "net": round(net, 4),
+        "news": tr["news_at_open"], "reason": reason}])[-500:]
     tr["position"], tr["entry_price"], tr["cooldown"] = 0, 0.0, F.COOLDOWN_BARS
     tr["peak"] = max(tr["peak"], tr["balance"])
     tr["max_dd"] = min(tr["max_dd"], tr["balance"] / tr["peak"] - 1)
@@ -369,6 +383,7 @@ def open_position(side, price, bar_ts_ms):
     tr["balance"] -= tr["balance"] * F.COST_PER_SIDE
     tr["position"], tr["entry_price"] = side, price
     tr["trades_today"] += 1
+    tr["news_at_open"], tr["open_ts"] = state["news_agent"]["status"], int(time.time())
     state["markers"].append({"time": _bar_time(bar_ts_ms), "position": "belowBar" if side == 1 else "aboveBar",
                              "color": "#22c55e" if side == 1 else "#ef4444", "shape": "circle",
                              "text": f"ENTRADA {'COMPRA' if side == 1 else 'VENDA'}"})
@@ -386,8 +401,8 @@ def entry_block_reason():
     """Motivo pelo qual novas entradas estão proibidas agora ('' = liberado)."""
     if tr["balance"] / tr["day_start_balance"] - 1 <= DAILY_LOSS_LIMIT:
         return f"limite de perda diária ({DAILY_LOSS_LIMIT*100:.0f}%)"
-    if state["news_agent"]["status"] in ("CAUTION", "DANGER"):
-        return f"analista de notícias: {rotulo_risco_analista(state['news_agent']['status'])}"
+    if time.time() < tr["breaker_until"]:
+        return "freio de volatilidade (movimento brusco do preço)"
     return ""
 
 
@@ -415,6 +430,10 @@ async def trading_tick():
     live = forming or closed[-1]
     price = float(live[4])
     last_closed_ts = int(closed[-1][0])
+    if len(closed) >= 5 and abs(closed[-1][4] / closed[-5][4] - 1) >= BREAKER_MOVE:   # 4 velas de 15m = 1h
+        if time.time() >= tr["breaker_until"]:
+            print(f">>> 🧯 Freio de volatilidade: {closed[-1][4] / closed[-5][4] - 1:+.2%} em 1h")
+        tr["breaker_until"] = time.time() + BREAKER_PAUSE_S
     roll_day()
 
     # --- stop-loss / take-profit com o preço ao vivo (checado a cada POLL_SECONDS) ---
@@ -603,6 +622,19 @@ async def get_historico():
         return [{"time": int(r[0] / 1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
     except Exception:
         return []
+
+
+@app.get("/api/shadow-report")
+async def shadow_report():
+    """Mede se o Analista de Notícias agregaria valor: resultado dos trades por status no momento da entrada."""
+    groups = {}
+    for t in tr["trade_log"]:
+        g = groups.setdefault(t["news"], {"trades": 0, "ganhos": 0, "pnl_liquido": 0.0})
+        g["trades"] += 1
+        g["ganhos"] += int(t["net"] > 0)
+        g["pnl_liquido"] = round(g["pnl_liquido"] + t["net"], 4)
+    return {"modo": "observação (não bloqueia entradas)", "leituras_que_bloqueariam": len(tr["news_events"]),
+            "trades_por_status_do_analista": groups, "ultimas_leituras": tr["news_events"][-10:]}
 
 
 @app.get("/api/download-dados")
