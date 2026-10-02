@@ -88,6 +88,10 @@ backend/dojo_supervised.py
 backend/mfeatures.py
 backend/mf4h.py
 backend/mf1d.py
+backend/arena.py
+backend/deriv.py
+backend/coletor_deriv.py
+backend/data/arena/
 backend/portfolio.py
 backend/walkforward.py
 backend/coletor_multi.py
