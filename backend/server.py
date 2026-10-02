@@ -521,7 +521,7 @@ async def lifespan(app: FastAPI):
         while True:
             state["uptime"] = time.strftime('%H:%M:%S', time.gmtime(int(time.time() - state["started_at"])))
             update_safe_state()
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.0)
 
     tasks = [asyncio.create_task(c) for c in (heartbeat(), sniper_loop(), analyst_market_loop())]
     try:
@@ -538,14 +538,21 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-_origins = [o.strip() for o in os.environ.get("FRONTEND_URL", "*").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"], expose_headers=["*"])
+# FRONTEND_URL (opcional, separada por vírgula) + qualquer *.vercel.app e localhost. A barra final é ignorada.
+_origins = [o.strip().rstrip("/") for o in os.environ.get("FRONTEND_URL", "").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_origins,
+                   allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app|http://localhost:\d+",
+                   allow_credentials=False, allow_methods=["*"], allow_headers=["*"], expose_headers=["*"])
 
 
 def require_admin(password):
     if not ADMIN_PASS or not password or not hmac.compare_digest(password.encode(), ADMIN_PASS.encode()):
         raise HTTPException(status_code=401, detail="Acesso Negado.")
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root():
+    return {"status": "ok"}
 
 
 @app.get("/health")
@@ -571,7 +578,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             await websocket.send_text(global_safe_state_str)
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
     except (WebSocketDisconnect, Exception):
         pass
 
