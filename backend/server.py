@@ -522,7 +522,7 @@ async def trading_tick():
 
     # --- status e painel ---
     if onnx_session is None or norm_stats is None:
-        state["status"] = "⏳ MOTOR OFFLINE (sem modelo/estatísticas válidos)..."
+        state["status"] = "⏳ Aguardando o primeiro cérebro (gen 1 ainda não passou no portão de aprovação)"
     elif stop_note:
         state["status"] = stop_note
     elif tr["position"] != 0:
@@ -550,7 +550,7 @@ async def sniper_loop():
     await persist_load()
     state["status"] = "⚙️ Carregando Motor de Inferência..."
     await asyncio.to_thread(load_brain)
-    state["adaptation"]["generation"] = int(m.group(1)) if MODEL_PATH and (m := re.search(r"gen_(\d+)", MODEL_PATH)) else 1
+    state["adaptation"]["generation"] = int(m.group(1)) if MODEL_PATH and (m := re.search(r"gen_(\d+)", MODEL_PATH)) else 0
     exchange = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
     last_save = time.time()
 

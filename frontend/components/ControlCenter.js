@@ -20,7 +20,7 @@ function Meter({ label, value, max, text, tone = "bg-accent", mark }) {
 function engineState(data) {
   const r = data.risk || {};
   if (r.halted) return { label: "Pausa de segurança", dot: "bg-loss", text: "text-loss", ring: "border-loss/40" };
-  if (!data.model?.loaded) return { label: "Motor offline", dot: "bg-loss", text: "text-loss", ring: "border-loss/30" };
+  if (!data.model?.loaded) return { label: "Aguardando cérebro", dot: "bg-accent", text: "text-accent", ring: "border-accent/30" };
   if (data.in_position) {
     const long = data.current_position === 1;
     return { label: long ? "Em posição · LONG" : "Em posição · SHORT", dot: long ? "bg-gain" : "bg-loss", text: long ? "text-gain" : "text-loss", ring: long ? "border-gain/30" : "border-loss/30" };
@@ -88,7 +88,7 @@ export default function ControlCenter({ data }) {
 
       <ul className="mt-5 grid grid-cols-2 gap-2 text-[11px]">
         <li className="flex items-center gap-1.5 rounded-lg border border-line bg-black/20 px-2.5 py-2 text-slate-300">
-          <Layers size={12} className="text-violet" /> {gen ? `Cérebro gen ${gen}` : "Sem modelo"}
+          <Layers size={12} className="text-violet" /> {gen ? `Cérebro gen ${gen}` : "Cérebro gen 0 · em treino"}
         </li>
         <li className="flex items-center gap-1.5 rounded-lg border border-line bg-black/20 px-2.5 py-2 text-slate-300">
           <ShieldCheck size={12} className="text-gain" /> Simulação

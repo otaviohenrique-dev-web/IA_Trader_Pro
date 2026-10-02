@@ -372,12 +372,12 @@ aiohttp              # Requisições assíncronas
 
 ## Estado atual do projeto (atualizado)
 
-**O que roda no Render:** painel de monitoramento + robô de **simulação** (saldo fictício de US$ 1.000, nenhuma ordem real) em BTC/USDT, lendo preços da Kraken. O cérebro em produção (gen_27) quase não opera: é uma vitrine funcional, não uma fonte de renda.
+**O que roda no Render:** painel de monitoramento + robô de **simulação** (saldo fictício de US$ 1.000, nenhuma ordem real) em BTC/USDT, lendo preços da Kraken. **Geração 0:** todos os modelos antigos foram descartados; o painel fica em "Aguardando cérebro" e não opera até um modelo novo passar no portão de aprovação (o primeiro será a gen 1).
 
 **Proteções ativas:** stop 1% / alvo 2%, cooldown, máx. 6 entradas/dia, pausa se o dia perder 3%, freio de volatilidade (movimento >= 3% em 1h), **kill-switch** (queda de 10% desde o pico pausa tudo até reativar em *Laboratório neural > Reativar robô*). Alertas opcionais no **Telegram** (`TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`). O Analista de Notícias (Gemini) está em **modo observação**: informa, não bloqueia; `/api/shadow-report` mede se ele ajudaria.
 
 **Pesquisa (laboratório local, fora do git):** foram testadas 9 abordagens de modelo em cripto, todas **reprovadas** no portão de aprovação (walk-forward, custos de 0,06%/lado): PPO e supervisionado em BTC 15m; modelo compartilhado em BTC/ETH/SOL/BNB/XRP em 1h, 4H e diário (MLP e gradient boosting); regras de tendência pré-definidas. Em todos o ganho previsto não se confirmou fora da amostra (correlação previsto x realizado próxima de zero), e um controle positivo (variável que vê o futuro) confirma que o pipeline detecta sinal quando existe. Portão: >= 300 trades, fator de lucro >= 1,15, PF > 1 em >= 70% das janelas, queda máx. <= 15%, IC ajustado pelo nº de experimentos acima de zero; teste final trancado nos últimos 6 meses.
 
-**Retomar a pesquisa:** `backend/.venv` (use `pip install -r requirements-train.txt`) e `python walkforward.py --profile 4h --model gbm --long-only`. Dados: `python coletor_multi.py`. O código do laboratório antigo (PPO/15m) está arquivado em `backend/_legado/`.
+**Retomar a pesquisa:** `backend/.venv` (use `pip install -r requirements-train.txt`) e `python walkforward.py --profile 4h --model gbm --long-only`. Dados: `python coletor_multi.py`.
 
 **Render (plano free):** 1 worker; configure `UPSTASH_REDIS_REST_URL/TOKEN` para persistir o estado e um ping externo em `/health` (ex.: UptimeRobot, 5 min) para evitar o sleep.
