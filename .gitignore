@@ -86,6 +86,8 @@ backend/coletor_backtest.py
 backend/backtest.py
 backend/dojo_supervised.py
 backend/mfeatures.py
+backend/mf4h.py
+backend/mf1d.py
 backend/portfolio.py
 backend/walkforward.py
 backend/coletor_multi.py
