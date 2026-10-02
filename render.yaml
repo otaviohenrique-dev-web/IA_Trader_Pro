@@ -35,6 +35,15 @@ services:
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
+      # Alertas no Telegram (opcional): crie um bot no @BotFather e pegue o chat id com @userinfobot
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: STARTING_BALANCE
+        value: "1000"
+      - key: KILL_SWITCH_DD
+        value: "0.10"
       # Opcional: URL do frontend na Vercel para restringir o CORS (ex.: https://meuapp.vercel.app)
       - key: FRONTEND_URL
         sync: false

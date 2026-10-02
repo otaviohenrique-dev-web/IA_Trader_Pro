@@ -24,6 +24,14 @@ export default function AdminPanel({ model }) {
     } catch (e) { setMsg(`Erro: ${e.message}`); }
   };
 
+  const resume = async () => {
+    if (!senha) return setMsg("Digite a senha de administrador.");
+    try {
+      const res = await fetch(`${API}/api/resume`, { method: "POST", headers: { "x-admin-password": senha } });
+      setMsg(res.ok ? "Robô reativado." : res.status === 401 ? "Erro: senha incorreta" : `Erro: HTTP ${res.status}`);
+    } catch (e) { setMsg(`Erro: ${e.message}`); }
+  };
+
   const upload = async () => {
     if (!senha || !files.length) return setMsg("Informe a senha e escolha os arquivos.");
     setLoading(true);
@@ -70,6 +78,10 @@ export default function AdminPanel({ model }) {
           <button type="button" onClick={download}
             className="rounded-lg border border-accent/40 bg-accent/10 py-2 text-xs font-bold text-accent transition-colors hover:bg-accent/20">
             Exportar CSV
+          </button>
+          <button type="button" onClick={resume}
+            className="rounded-lg border border-warn/40 bg-warn/10 py-2 text-xs font-bold text-warn transition-colors hover:bg-warn/20">
+            Reativar robô (após kill-switch)
           </button>
         </div>
 

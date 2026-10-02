@@ -55,7 +55,10 @@ POLL_SECONDS = 30                       # consulta preço/stop; a rede só decid
 WARMUP_BARS = 96                        # velas reprocessadas para aquecer a memória da LSTM
 CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", 0.5))
 DAILY_LOSS_LIMIT = float(os.environ.get("DAILY_LOSS_LIMIT", -0.03))   # bloqueia novas entradas no dia
-STARTING_BALANCE = 100.0
+STARTING_BALANCE = float(os.environ.get("STARTING_BALANCE", 1000.0))
+KILL_SWITCH_DD = float(os.environ.get("KILL_SWITCH_DD", 0.10))      # queda desde o pico que pausa TUDO
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 BREAKER_MOVE = float(os.environ.get("BREAKER_MOVE", 0.03))        # |variação de 1h| >= 3% pausa novas entradas
 BREAKER_PAUSE_S = int(float(os.environ.get("BREAKER_PAUSE_H", 2)) * 3600)
@@ -96,6 +99,7 @@ tr = {
     "wins": 0, "losses": 0, "gross_win": 0.0, "gross_loss": 0.0,
     "cooldown": 0, "day": "", "day_start_balance": STARTING_BALANCE, "trades_today": 0,
     "peak": STARTING_BALANCE, "max_dd": 0.0, "last_bar_ts": 0,
+    "halted": False,               # kill-switch: só volta com /api/resume (admin)
     "breaker_until": 0.0,          # freio de volatilidade: sem novas entradas até este instante (epoch s)
     "news_at_open": "SAFE", "open_ts": 0,
     "trade_log": [],               # últimos trades com o status do Analista no momento da entrada (modo sombra)
@@ -197,6 +201,7 @@ def sync_public_state():
         "cooldown_left": tr["cooldown"], "cooldown_bars": F.COOLDOWN_BARS,
         "stop_loss_pct": F.STOP_LOSS_PCT * 100, "take_profit_pct": F.TAKE_PROFIT_PCT * 100,
         "conf_threshold": CONF_THRESHOLD, "entries_blocked": entry_block_reason(),
+        "halted": tr["halted"], "kill_switch_pct": KILL_SWITCH_DD * 100,
         "trades_today": tr["trades_today"], "daily_pnl_pct": round(day_pnl * 100, 2),
         "max_drawdown_pct": round(tr["max_dd"] * 100, 2),
         "profit_factor": round(tr["gross_win"] / tr["gross_loss"], 2) if tr["gross_loss"] > 0 else 0.0})
@@ -350,6 +355,24 @@ def _bar_time(ts_ms):
     return int(ts_ms // 1000)
 
 
+async def _send_telegram(text):
+    if not (TG_TOKEN and TG_CHAT):
+        return
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
+            await sess.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT, "text": text})
+    except Exception as e:                      # nunca registra o token
+        print(f">>> ⚠️ Telegram indisponível: {type(e).__name__}")
+
+
+def notify(text):
+    """Alerta no Telegram (silencioso se não configurado ou fora do loop de eventos)."""
+    try:
+        asyncio.get_running_loop().create_task(_send_telegram(text))
+    except RuntimeError:
+        pass
+
+
 def close_position(price, bar_ts_ms, reason):
     """Fecha a posição aberta: PnL bruto, taxa de saída e contabilidade."""
     pos = tr["position"]
@@ -376,6 +399,7 @@ def close_position(price, bar_ts_ms, reason):
     state["order_book"].insert(0, {"text": f"[{now_hms()}] 🏁 Fechou {lado} ({reason}) | PnL líquido: US$ {net:.2f} ({'ganho ✅' if net > 0 else 'perda ❌'})"})
     state["markers"] = state["markers"][-120:]
     state["order_book"] = state["order_book"][:120]
+    notify(f"🏁 {lado} fechada ({reason})\nResultado líquido: US$ {net:+.2f}\nSaldo: US$ {tr['balance']:.2f} (simulação)")
 
 
 def open_position(side, price, bar_ts_ms):
@@ -389,6 +413,7 @@ def open_position(side, price, bar_ts_ms):
                              "text": f"ENTRADA {'COMPRA' if side == 1 else 'VENDA'}"})
     lado = "compra (long)" if side == 1 else "venda (short)"
     state["order_book"].insert(0, {"text": f"[{now_hms()}] 🚀 Abriu {lado} a US$ {price:.2f} (custo: {F.COST_PER_SIDE*100:.3f}%)"})
+    notify(f"🚀 {lado} aberta em {SYMBOL} a US$ {price:,.2f} (simulação)")
 
 
 def roll_day():
@@ -399,6 +424,8 @@ def roll_day():
 
 def entry_block_reason():
     """Motivo pelo qual novas entradas estão proibidas agora ('' = liberado)."""
+    if tr["halted"]:
+        return f"kill-switch: queda de {KILL_SWITCH_DD*100:.0f}% desde o pico (reative no painel admin)"
     if tr["balance"] / tr["day_start_balance"] - 1 <= DAILY_LOSS_LIMIT:
         return f"limite de perda diária ({DAILY_LOSS_LIMIT*100:.0f}%)"
     if time.time() < tr["breaker_until"]:
@@ -433,6 +460,7 @@ async def trading_tick():
     if len(closed) >= 5 and abs(closed[-1][4] / closed[-5][4] - 1) >= BREAKER_MOVE:   # 4 velas de 15m = 1h
         if time.time() >= tr["breaker_until"]:
             print(f">>> 🧯 Freio de volatilidade: {closed[-1][4] / closed[-5][4] - 1:+.2%} em 1h")
+            notify(f"🧯 Freio de volatilidade: {closed[-1][4] / closed[-5][4] - 1:+.2%} em 1h. Novas entradas pausadas.")
         tr["breaker_until"] = time.time() + BREAKER_PAUSE_S
     roll_day()
 
@@ -442,6 +470,18 @@ async def trading_tick():
         if chg <= -F.STOP_LOSS_PCT or chg >= F.TAKE_PROFIT_PCT:
             close_position(price, live[0], "STOP-LOSS" if chg < 0 else "TAKE-PROFIT")
             stop_note = "🚨 STOP-LOSS ACIONADO" if chg < 0 else "🎯 ALVO ATINGIDO"
+            sync_public_state()
+            await persist_save()
+
+    # --- kill-switch global: queda desde o pico (inclui o resultado flutuante) ---
+    if not tr["halted"]:
+        float_pnl = tr["balance"] * tr["position"] * (price - tr["entry_price"]) / tr["entry_price"] if tr["position"] else 0.0
+        if (tr["balance"] + float_pnl) / tr["peak"] - 1 <= -KILL_SWITCH_DD:
+            if tr["position"] != 0:
+                close_position(price, live[0], "KILL-SWITCH")
+            tr["halted"] = True
+            stop_note = "🛑 KILL-SWITCH ACIONADO"
+            notify(f"🛑 KILL-SWITCH: queda de {KILL_SWITCH_DD*100:.0f}% desde o pico. Robô PAUSADO até você reativar no painel.\nSaldo: US$ {tr['balance']:.2f}")
             sync_public_state()
             await persist_save()
 
@@ -622,6 +662,17 @@ async def get_historico():
         return [{"time": int(r[0] / 1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
     except Exception:
         return []
+
+
+@app.post("/api/resume")
+async def resume(x_admin_password: str = Header(None)):
+    """Reativa o robô depois do kill-switch (o pico é redefinido para o saldo atual)."""
+    require_admin(x_admin_password)
+    tr["halted"], tr["peak"] = False, tr["balance"]
+    sync_public_state()
+    await persist_save()
+    notify("▶️ Robô reativado manualmente.")
+    return {"status": "reativado", "saldo": tr["balance"]}
 
 
 @app.get("/api/shadow-report")

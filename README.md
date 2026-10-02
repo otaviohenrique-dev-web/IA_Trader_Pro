@@ -370,10 +370,14 @@ aiohttp              # Requisições assíncronas
 
 ---
 
-## Operação, risco e retreino (atualizado)
+## Estado atual do projeto (atualizado)
 
-- O robô é **paper trading** (simula; não envia ordens). Custos simulados: 0,05% taxa + 0,01% slippage por lado.
-- Treino, backtest e servidor usam o mesmo código (`features.py`, `envs/trading_env.py`). O backtest é **out-of-sample** (últimos 20%).
-- Retreinar: `python dojo.py --steps 1000000` (requer `requirements-train.txt`). Ele gera `.onnx` + `.stats.json`; envie os **dois** (ou commite) e só adote se `python backtest.py` mostrar `profit_factor > 1` e drawdown aceitável **fora da amostra**.
-- Freio de atividade: `CONF_THRESHOLD` (confiança mínima p/ abrir), `MAX_TRADES_PER_DAY`, `COOLDOWN_BARS`, `DAILY_LOSS_LIMIT`.
-- Render free: use 1 worker, configure `UPSTASH_REDIS_REST_URL/TOKEN` para persistir o estado e um ping externo em `/health` (ex.: UptimeRobot, 5 min) para evitar o sleep.
+**O que roda no Render:** painel de monitoramento + robô de **simulação** (saldo fictício de US$ 1.000, nenhuma ordem real) em BTC/USDT, lendo preços da Kraken. O cérebro em produção (gen_27) quase não opera: é uma vitrine funcional, não uma fonte de renda.
+
+**Proteções ativas:** stop 1% / alvo 2%, cooldown, máx. 6 entradas/dia, pausa se o dia perder 3%, freio de volatilidade (movimento >= 3% em 1h), **kill-switch** (queda de 10% desde o pico pausa tudo até reativar em *Laboratório neural > Reativar robô*). Alertas opcionais no **Telegram** (`TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`). O Analista de Notícias (Gemini) está em **modo observação**: informa, não bloqueia; `/api/shadow-report` mede se ele ajudaria.
+
+**Pesquisa (laboratório local, fora do git):** foram testadas 9 abordagens de modelo em cripto, todas **reprovadas** no portão de aprovação (walk-forward, custos de 0,06%/lado): PPO e supervisionado em BTC 15m; modelo compartilhado em BTC/ETH/SOL/BNB/XRP em 1h, 4H e diário (MLP e gradient boosting); regras de tendência pré-definidas. Em todos o ganho previsto não se confirmou fora da amostra (correlação previsto x realizado próxima de zero), e um controle positivo (variável que vê o futuro) confirma que o pipeline detecta sinal quando existe. Portão: >= 300 trades, fator de lucro >= 1,15, PF > 1 em >= 70% das janelas, queda máx. <= 15%, IC ajustado pelo nº de experimentos acima de zero; teste final trancado nos últimos 6 meses.
+
+**Retomar a pesquisa:** `backend/.venv` (use `pip install -r requirements-train.txt`) e `python walkforward.py --profile 4h --model gbm --long-only`. Dados: `python coletor_multi.py`. O código do laboratório antigo (PPO/15m) está arquivado em `backend/_legado/`.
+
+**Render (plano free):** 1 worker; configure `UPSTASH_REDIS_REST_URL/TOKEN` para persistir o estado e um ping externo em `/health` (ex.: UptimeRobot, 5 min) para evitar o sleep.

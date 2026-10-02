@@ -19,6 +19,7 @@ function Meter({ label, value, max, text, tone = "bg-accent", mark }) {
 
 function engineState(data) {
   const r = data.risk || {};
+  if (r.halted) return { label: "Pausa de segurança", dot: "bg-loss", text: "text-loss", ring: "border-loss/40" };
   if (!data.model?.loaded) return { label: "Motor offline", dot: "bg-loss", text: "text-loss", ring: "border-loss/30" };
   if (data.in_position) {
     const long = data.current_position === 1;
