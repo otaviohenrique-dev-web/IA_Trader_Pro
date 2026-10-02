@@ -32,6 +32,17 @@ export default function AdminPanel({ model }) {
     } catch (e) { setMsg(`Erro: ${e.message}`); }
   };
 
+  const testAlert = async () => {
+    if (!senha) return setMsg("Digite a senha de administrador.");
+    setMsg("Enviando teste ao Telegram…");
+    try {
+      const res = await fetch(`${API}/api/test-alert`, { method: "POST", headers: { "x-admin-password": senha } });
+      if (res.status === 401) return setMsg("Erro: senha incorreta");
+      const d = await res.json();
+      setMsg(d.enviado ? "Alerta enviado: confira o Telegram." : `Não enviou: ${d.detalhe}`);
+    } catch (e) { setMsg(`Erro: ${e.message}`); }
+  };
+
   const upload = async () => {
     if (!senha || !files.length) return setMsg("Informe a senha e escolha os arquivos.");
     setLoading(true);
@@ -82,6 +93,10 @@ export default function AdminPanel({ model }) {
           <button type="button" onClick={resume}
             className="rounded-lg border border-warn/40 bg-warn/10 py-2 text-xs font-bold text-warn transition-colors hover:bg-warn/20">
             Reativar robô (após kill-switch)
+          </button>
+          <button type="button" onClick={testAlert}
+            className="rounded-lg border border-line bg-white/5 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-white/10">
+            Testar alerta do Telegram
           </button>
         </div>
 

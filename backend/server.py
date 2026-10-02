@@ -356,13 +356,22 @@ def _bar_time(ts_ms):
 
 
 async def _send_telegram(text):
+    """Envia ao Telegram. Retorna (ok, detalhe); o detalhe nunca contém o token."""
     if not (TG_TOKEN and TG_CHAT):
-        return
+        return False, "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID não configurados no servidor"
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
-            await sess.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT, "text": text})
+            async with sess.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT, "text": text}) as r:
+                if r.status == 200:
+                    return True, ""
+                try:
+                    desc = (await r.json()).get("description", "")
+                except Exception:
+                    desc = ""
+                return False, f"Telegram respondeu HTTP {r.status}: {desc}"
     except Exception as e:                      # nunca registra o token
         print(f">>> ⚠️ Telegram indisponível: {type(e).__name__}")
+        return False, f"falha de rede ({type(e).__name__})"
 
 
 def notify(text):
@@ -662,6 +671,14 @@ async def get_historico():
         return [{"time": int(r[0] / 1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
     except Exception:
         return []
+
+
+@app.post("/api/test-alert")
+async def test_alert(x_admin_password: str = Header(None)):
+    """Envia uma mensagem de teste ao Telegram (usa as variáveis guardadas no servidor)."""
+    require_admin(x_admin_password)
+    ok, detail = await _send_telegram("✅ Teste de alerta do IA Trader Pro: o Telegram está funcionando.")
+    return {"enviado": ok, "detalhe": detail}
 
 
 @app.post("/api/resume")
