@@ -1,124 +1,96 @@
-import React from 'react';
-import { ShieldCheck, ShieldAlert, ShieldX, Newspaper, Radio } from 'lucide-react';
-import { Gemini } from '@lobehub/icons'; // Novo Ícone Premium
+import React from "react";
+import { ShieldCheck, ShieldAlert, ShieldX, Newspaper, Radio } from "lucide-react";
+import { Gemini } from "@lobehub/icons";
+
+const TONES = {
+  SAFE: { label: "Seguro", text: "text-gain", ring: "border-gain/30", chip: "bg-gain/10", Icon: ShieldCheck },
+  CAUTION: { label: "Atenção", text: "text-warn", ring: "border-warn/30", chip: "bg-warn/10", Icon: ShieldAlert },
+  DANGER: { label: "Perigo", text: "text-loss", ring: "border-loss/40", chip: "bg-loss/10", Icon: ShieldX },
+  "MODO TÉCNICO": { label: "Modo técnico", text: "text-slate-300", ring: "border-slate-500/30", chip: "bg-slate-500/10", Icon: ShieldCheck },
+  BAIXO: { label: "Baixo", text: "text-gain", ring: "border-gain/30", chip: "bg-gain/10", Icon: ShieldCheck },
+  "INICIALIZANDO...": { label: "Iniciando", text: "text-accent", ring: "border-accent/30", chip: "bg-accent/10", Icon: Newspaper },
+};
+
+const IMPACT = {
+  SAFE: "Sem bloqueio: o robô pode operar normalmente.",
+  CAUTION: "Novas entradas pausadas até o risco diminuir.",
+  DANGER: "Novas entradas pausadas. Risco macro extremo.",
+  "MODO TÉCNICO": "Sem acesso a notícias: operando só com análise técnica.",
+};
 
 export default function NewsSentinel({ data }) {
   if (!data) return null;
-
-  // Adicionamos a extração da variável 'reason' enviada pelo backend
-  const { status, sentiment_score, risk_level, last_headlines, reason } = data;
-
-  const config = {
-    SAFE: { color: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10', icon: <ShieldCheck size={18}/> },
-    CAUTION: { color: 'text-yellow-400', border: 'border-yellow-500/30', bg: 'bg-yellow-500/10', icon: <ShieldAlert size={18}/> },
-    DANGER: { color: 'text-red-400', border: 'border-red-500/30', bg: 'bg-red-500/10', icon: <ShieldX size={18}/> },
-    'MODO TÉCNICO': { color: 'text-slate-300', border: 'border-slate-500/30', bg: 'bg-slate-500/10', icon: <ShieldCheck size={18}/> },
-    BAIXO: { color: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10', icon: <ShieldCheck size={18}/> },
-    'INICIALIZANDO...': { color: 'text-blue-400', border: 'border-blue-500/30', bg: 'bg-blue-500/10', icon: <Newspaper size={18}/> },
-  };
-
-  const rotuloStatus = {
-    SAFE: 'Seguro',
-    CAUTION: 'Atenção',
-    DANGER: 'Perigo',
-    'MODO TÉCNICO': 'Modo técnico',
-    BAIXO: 'Baixo',
-    'INICIALIZANDO...': 'Inicializando',
-  };
-
-  const current = config[risk_level] || config[status] || config.SAFE;
-
-  const score = data?.sentiment_score || 0;
-  const scorePct = Math.round(score * 100);
-
-  // NOVO: Cores alinhadas com a calibragem de 60% (SAFE) e 80% (CAUTION) do backend
-  let barColorClass = "bg-green-500"; 
-  let textColorClass = "text-green-400";
-
-  if (scorePct > 60 && scorePct <= 80) {
-    barColorClass = "bg-yellow-500"; 
-    textColorClass = "text-yellow-400";
-  } else if (scorePct > 80) {
-    barColorClass = "bg-red-500 animate-pulse"; 
-    textColorClass = "text-red-400";
-  }
+  const { status, last_headlines, reason } = data;
+  const tone = TONES[status] || TONES[data.risk_level] || TONES.SAFE;
+  const Icon = tone.Icon;
+  const scorePct = Math.max(0, Math.min(100, Math.round((data.sentiment_score || 0) * 100)));
+  const bar = scorePct > 80 ? "bg-loss" : scorePct > 60 ? "bg-warn" : "bg-gain";
+  const scoreText = scorePct > 80 ? "text-loss" : scorePct > 60 ? "text-warn" : "text-gain";
 
   return (
-    <div className={`h-full p-4 rounded-xl border ${current.border} ${current.bg} backdrop-blur-sm flex flex-col justify-between overflow-hidden shadow-lg transition-all duration-500`}>
-      
-      {/* 1. Header do Analista (Premium) */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          {/* Note que reduzi o size de 56 para 20 para não estourar o layout da header, mantendo a elegância */}
-          <Gemini.Color size={20} type={'color'}/>
-          <h3 className="font-bold text-white text-[11px] uppercase tracking-tighter italic">Analista de Notícias</h3>
+    <section className={`card flex flex-col overflow-hidden p-5 ${tone.ring} transition-colors duration-500`}>
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-white/5">
+            <Gemini.Color size={18} />
+          </span>
+          <div>
+            <h3 className="text-sm font-bold leading-tight text-white">Analista de Notícias</h3>
+            <p className="text-[10px] text-slate-500">Leitura de risco macro por IA · atualiza a cada hora</p>
+          </div>
         </div>
-        <div className={`px-2 py-0.5 rounded text-[9px] font-black border ${current.border} ${current.color} bg-black/40 font-mono`}>
-          {rotuloStatus[status] || status}
+        <span className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold ${tone.ring} ${tone.chip} ${tone.text}`}>
+          <Icon size={12} /> {tone.label}
+        </span>
+      </header>
+
+      <div className="mt-5">
+        <div className="flex items-end justify-between">
+          <span className="eyebrow">Índice de risco</span>
+          <span className={`num text-3xl font-black leading-none ${scoreText}`}>{scorePct}<span className="text-base">%</span></span>
+        </div>
+        <div className="relative mt-2.5 h-2 w-full overflow-hidden rounded-full bg-white/5">
+          <div className={`h-full rounded-full transition-all duration-1000 ${bar}`} style={{ width: `${scorePct}%` }} />
+          <span className="absolute inset-y-0 left-[60%] w-px bg-white/25" />
+          <span className="absolute inset-y-0 left-[80%] w-px bg-white/25" />
+        </div>
+        <div className="mt-1 flex text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+          <span className="w-[60%]">Seguro</span><span className="w-[20%]">Atenção</span><span className="w-[20%] text-right">Perigo</span>
         </div>
       </div>
 
-      <div className="mt-auto">
-        <div className="flex justify-between items-end mb-1">
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-            Sentimento macro
-          </span>
-          <span className={`text-xl font-black font-mono ${textColorClass}`}>
-            {scorePct}%
-          </span>
-        </div>
-        
-        {/* O fundo da barra (Trilho) */}
-        <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
-          <div 
-            className={`h-full transition-all duration-1000 ease-in-out ${barColorClass}`} 
-            style={{ width: `${scorePct}%` }} 
-          />
-        </div>
-      </div> 
-
-      {/* 2. Parecer Textual da IA (Injetado do Backend) */}
-      <div className="mt-3 mb-3 p-2 bg-black/40 border border-slate-700/50 rounded-lg min-h-10 flex items-center">
-        <p className="text-[10px] text-slate-300 font-mono italic leading-relaxed">
-          <span className="text-blue-400 font-bold not-italic">Parecer: </span>
-          {reason ? `"${reason}"` : "Aguardando sincronização neural..."}
+      <div className="mt-4 rounded-xl border border-line bg-black/20 p-3">
+        <p className="text-xs italic leading-relaxed text-slate-300">
+          {reason ? `“${reason}”` : "Aguardando a primeira leitura do mercado…"}
+        </p>
+        <p className={`mt-2 border-t border-line pt-2 text-[11px] font-medium ${tone.text}`}>
+          {IMPACT[status] || IMPACT.SAFE}
         </p>
       </div>
 
-      {/* 3. O LETREIRO DE LED (Ticker) */}
-      <div className="relative bg-black/60 border border-orange-500/20 rounded p-2 h-16 flex items-center overflow-hidden group shadow-inner mt-auto">
-        <div className="absolute left-0 top-0 bottom-0 w-10 bg-linear-to-r from-black/80 to-transparent z-10 pointer-events-none" />
-        <div className="absolute right-0 top-0 bottom-0 w-10 bg-linear-to-l from-black/80 to-transparent z-10 pointer-events-none" />
-        
-        <div className="flex whitespace-nowrap animate-marquee group-hover:pause transition-all duration-300">
-          {last_headlines && last_headlines.length > 0 ? (
-            [...last_headlines, ...last_headlines].map((news, i) => (
-              <span key={i} className="text-[11px] font-mono text-orange-400/90 mx-6 flex items-center gap-2 tracking-wide">
-                <Radio size={10} className="text-orange-600 animate-pulse" /> {news}
-              </span>
+      <div className="group relative mt-4 flex h-11 items-center overflow-hidden rounded-xl border border-line bg-black/30">
+        <span className="absolute left-0 z-20 flex h-full items-center gap-1 bg-panel px-2.5 text-[10px] font-bold uppercase tracking-wider text-warn">
+          <Radio size={11} className="animate-pulse" /> Ao vivo
+        </span>
+        <div className="pointer-events-none absolute inset-y-0 left-[84px] z-10 w-8 bg-linear-to-r from-panel to-transparent" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-linear-to-l from-panel to-transparent" />
+        <div className="news-track ml-[84px] whitespace-nowrap">
+          {last_headlines?.length ? (
+            [...last_headlines, ...last_headlines].map((n, i) => (
+              <span key={i} className="mx-5 text-[11px] text-slate-300">{n}</span>
             ))
           ) : (
-            <span className="text-[11px] font-mono text-gray-600 uppercase mx-4">
-              Aguardando novo fluxo de frequências...
-            </span>
+            <span className="mx-5 text-[11px] text-slate-600">Aguardando novas manchetes…</span>
           )}
         </div>
       </div>
 
-      {/* Estilo Global para a Animação */}
       <style jsx>{`
-        @keyframes marquee {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
-        }
-        .animate-marquee {
-          display: inline-flex;
-          animation: marquee 180s linear infinite; 
-        }
-        .group:hover .animate-marquee {
-          animation-play-state: paused;
-        }
+        @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        .news-track { display: inline-flex; animation: marquee 180s linear infinite; }
+        .group:hover .news-track { animation-play-state: paused; }
+        @media (prefers-reduced-motion: reduce) { .news-track { animation: none; } }
       `}</style>
-    </div>
+    </section>
   );
 }

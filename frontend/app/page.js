@@ -1,447 +1,47 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
-import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts'; 
-import { Activity, CircleDot, Clock, Zap, Brain, ShieldAlert, Wallet, List, Bitcoin, Download, Upload, Key, Database, Github, Linkedin } from 'lucide-react';
-import NewsSentinel from '../components/NewsSentinel';
+import React, { useEffect, useRef, useState } from "react";
+import { Activity, CircleDot, Clock, Github, Linkedin, List, ShieldAlert, ShieldCheck, TrendingUp } from "lucide-react";
+import NewsSentinel from "../components/NewsSentinel";
+import ControlCenter from "../components/ControlCenter";
+import TradingChart from "../components/TradingChart";
+import AdminPanel from "../components/AdminPanel";
+import { backendHttpBase, backendWsUrl } from "../lib/api";
+import { fmtPct, fmtPrice, fmtUsd, tone } from "../lib/format";
 
-// 🛡️ BLINDAGEM DE AMBIENTE: Remove formatações Markdown ([url](url)) acidentais
-function sanitizeEnvUrl(urlStr) {
-  if (!urlStr) return "";
-  const match = urlStr.match(/^\[.*?\]\((.*?)\)$/);
-  const cleanStr = match ? match[1] : urlStr;
-  return cleanStr.trim().replace(/\/$/, ""); 
-}
-
-/** HTTP base do FastAPI */
-function backendHttpBase() {
-  const rawApi = process.env.NEXT_PUBLIC_API_URL;
-  if (rawApi) return sanitizeEnvUrl(rawApi);
-  
-  const rawWs = process.env.NEXT_PUBLIC_WS_URL;
-  const wsUrl = sanitizeEnvUrl(rawWs) || "ws://127.0.0.1:10000/ws";
-  return wsUrl
-    .replace(/^wss:\/\//i, "https://")
-    .replace(/^ws:\/\//i, "http://")
-    .replace(/\/ws\/?$/i, "");
-}
-
-/** WebSocket do backend */
-function backendWsUrl() {
-  const rawWs = process.env.NEXT_PUBLIC_WS_URL;
-  if (rawWs) return sanitizeEnvUrl(rawWs);
-  
-  const api = backendHttpBase();
-  if (api) {
-    const host = api.includes("://") ? api.split("://")[1] : api;
-    if (/^https:/i.test(api)) return `wss://${host}/ws`;
-    return `ws://${host}/ws`;
-  }
-  return "ws://127.0.0.1:10000/ws";
-}
-
-// ==========================================
-// 🧮 FUNÇÃO ZIGZAG (Topos e Fundos)
-// ==========================================
-const calculateZigZag = (data, thresholdPct = 0.5) => {
-  if (!data || data.length === 0) return [];
-  let pivots = [];
-  let lastPivot = { ...data[0], type: 'none' };
-  let trend = 0; 
-
-  for (let i = 1; i < data.length; i++) {
-    const candle = data[i];
-    const changeHigh = ((candle.high - lastPivot.low) / lastPivot.low) * 100;
-    const changeLow = ((lastPivot.high - candle.low) / lastPivot.high) * 100;
-
-    if (trend !== 1 && changeHigh >= thresholdPct) {
-      pivots.push({ time: lastPivot.time, value: lastPivot.low });
-      lastPivot = candle;
-      trend = 1;
-    } else if (trend !== -1 && changeLow >= thresholdPct) {
-      pivots.push({ time: lastPivot.time, value: lastPivot.high });
-      lastPivot = candle;
-      trend = -1;
-    } else {
-      if (trend === 1 && candle.high > lastPivot.high) lastPivot = candle;
-      if (trend === -1 && candle.low < lastPivot.low) lastPivot = candle;
-    }
-  }
-  pivots.push({ time: lastPivot.time, value: trend === 1 ? lastPivot.high : lastPivot.low });
-  
-  return pivots
-    .filter((v, i, a) => v.value != null && !Number.isNaN(v.value) && a.findIndex(t => t.time === v.time) === i)
-    .sort((a, b) => a.time - b.time);
-};
-
-/** Marcadores de entrada com preço Y exato */
-function prepareChartMarkers(markers, candleByTime) {
-  if (!markers?.length) return [];
-  return markers.map((m) => {
-    if (m.shape !== "circle") return m;
-    const c = candleByTime.get(m.time);
-    const price = m.price != null ? Number(m.price) : (c?.close != null ? Number(c.close) : null);
-    if (price == null || Number.isNaN(price)) return m;
-    const size = Math.max(3, Number(m.size) || 3);
-    return { ...m, position: "atPriceMiddle", price, size };
-  });
-}
-
-/** Linha horizontal no preço de entrada */
-function buildEntryHorizontalLineData(markers, liveCandle, inPosition, entryPriceState, candleMap) {
-  if (!markers?.length) return [];
-  const sorted = [...markers].sort((a, b) => a.time - b.time);
-  const circles = sorted.filter((m) => m.shape === "circle");
-  if (circles.length === 0) return [];
-
-  const segments = [];
-  for (const ent of circles) {
-    let px = ent.price != null ? Number(ent.price) : null;
-    if (px == null || Number.isNaN(px)) {
-      const c = candleMap.get(ent.time);
-      if (c?.close != null) px = Number(c.close);
-    }
-    if (px == null || Number.isNaN(px)) continue;
-
-    const exit = sorted.find((m) => m.shape === "square" && m.time > ent.time);
-    if (exit) {
-      segments.push({ t0: ent.time, t1: exit.time, price: px });
-    } else {
-      let endT = liveCandle?.time != null ? Number(liveCandle.time) : ent.time;
-      if (inPosition && entryPriceState != null && !Number.isNaN(Number(entryPriceState))) {
-        px = Number(entryPriceState);
-      }
-      if (endT <= ent.time) endT = ent.time + 900;
-      if (px != null && !Number.isNaN(px)) {
-        segments.push({ t0: ent.time, t1: endT, price: px });
-      }
-    }
-  }
-
-  const outMap = new Map();
-  segments.forEach((s) => {
-    if (s.price != null && !Number.isNaN(s.price)) {
-      if (!outMap.has(s.t0)) outMap.set(s.t0, s.price);
-      if (!outMap.has(s.t1)) outMap.set(s.t1, s.price);
-    }
-  });
-
-  return Array.from(outMap.entries())
-    .map(([time, value]) => ({ time: Number(time), value }))
-    .sort((a, b) => a.time - b.time);
-}
-
-// ==========================================
-// 🧬 COMPONENTE: DOJO (PROTOCOLO APOCALIPSE)
-// ==========================================
-function DojoPanel({ state }) {
-  const [senha, setSenha] = useState('');
-  const [file, setFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [mensagem, setMensagem] = useState('');
-
-  const API_URL = backendHttpBase();
-
-  const handleDownload = async () => {
-    if (!senha) { setMensagem('⚠️ Digite a senha Admin.'); return; }
-    setMensagem('⏳ Gerando arquivo...');
-    try {
-      const res = await fetch(`${API_URL}/api/download-dados`, { method: 'GET', headers: { 'x-admin-password': senha } });
-      if (!res.ok) throw new Error('Senha incorreta ou arquivo inexistente.');
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `historico_bot_${Date.now()}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      setMensagem('✅ Download Concluído!');
-    } catch (err) { setMensagem(`❌ Erro: ${err.message}`); }
-  };
-
-  const handleUpload = async () => {
-    if (!senha || !file) { setMensagem('⚠️ Chave ou arquivo ausente.'); return; }
-    setLoading(true);
-    setMensagem('⏳ Injetando ONNX...');
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const res = await fetch(`${API_URL}/api/upload-cerebro`, { method: 'POST', headers: { 'x-admin-password': senha }, body: formData });
-      if (res.ok) { setMensagem('✅ Geração Injetada com Sucesso!'); setFile(null); } 
-      else { setMensagem('❌ Acesso Negado (Senha Incorreta).'); }
-    } catch (err) { setMensagem('❌ Erro de Conexão.'); }
-    setLoading(false);
-  };
-
+function Kpi({ label, value, sub, valueClass = "text-white", children }) {
   return (
-    <div className="bg-slate-800/50 p-6 rounded-xl border border-purple-500/30 shadow-lg mt-6">
-      <h2 className="text-xl font-bold text-purple-400 mb-4 flex items-center gap-2 border-b border-purple-900/50 pb-3">
-        <Brain size={24} /> Laboratório Neural (Dojo)
-      </h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="space-y-3 bg-slate-900/50 p-4 rounded-lg border border-slate-700">
-          <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 uppercase tracking-widest"><Key size={14}/> Chave de Autorização</label>
-          <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded p-2 text-white font-mono text-sm" placeholder="••••••••" />
-          {mensagem && <div className="text-[10px] font-mono text-center p-1 bg-purple-500/10 text-purple-300 rounded border border-purple-500/20">{mensagem}</div>}
-        </div>
-        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-35">
-           <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 mb-2 uppercase tracking-widest"><Database size={14}/> Coleta de Dados</label>
-           <button onClick={handleDownload} className="w-full bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/50 py-2 rounded text-xs font-bold transition-all mt-auto">EXPORTAR HISTÓRICO (CSV)</button>
-        </div>
-        <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700 flex flex-col justify-between min-h-35">
-           <label className="text-xs font-semibold text-slate-400 flex items-center gap-2 mb-1 uppercase tracking-widest"><Upload size={14}/> Injetar Motor ONNX</label>
-           <span className="text-[9px] text-purple-400 mb-2 font-mono">Geração 7 (Arquitetura ONNX)</span>
-           <input type="file" accept=".onnx" onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)} className="text-[10px] text-slate-400 mb-2" />
-           <button onClick={handleUpload} disabled={loading || !file} className="w-full bg-purple-600 hover:bg-purple-500 text-white py-2 rounded text-xs font-bold shadow-lg shadow-purple-500/20 transition-all mt-auto">APLICAR CÉREBRO</button>
-        </div>
+    <div className="card flex flex-col justify-between p-4">
+      <span className="eyebrow">{label}</span>
+      <div className="mt-3">
+        <div className={`num text-2xl font-black leading-none sm:text-[1.65rem] ${valueClass}`}>{value}</div>
+        {sub && <div className="mt-1.5 text-[11px] text-slate-500">{sub}</div>}
+        {children}
       </div>
     </div>
   );
 }
 
-// ==========================================
-// 📈 COMPONENTE DE GRÁFICO (COM LINHA DE ENTRADA)
-// ==========================================
-function TradingChart({ liveCandle, markersData, inPosition, entryPrice, currentPosition }) {
-  const chartContainerRef = useRef(null);
-  const tooltipRef = useRef(null);
-  const chartInstance = useRef(null);
-  const seriesInstance = useRef(null);
-  const zigzagSeriesRef = useRef(null);
-  const exactTradeLineRef = useRef(null);
-  const entryHorizontalSeriesRef = useRef(null);
-
-  const isDataLoaded = useRef(false);
-  const markersRef = useRef([]);
-  const chartDataMap = useRef(new Map());
-  const currentHoverState = useRef("none");
-  const markersSigRef = useRef("");
-
-  useEffect(() => {
-    if (markersData) markersRef.current = markersData;
-  }, [markersData]);
-
-  useEffect(() => {
-    if (!chartContainerRef.current || chartInstance.current) return;
-
-    const initialWidth = chartContainerRef.current.clientWidth || 800;
-
-    const chart = createChart(chartContainerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: '#0f172a' }, textColor: '#94a3b8' },
-      grid: { vertLines: { color: 'rgba(30, 41, 59, 0.4)' }, horzLines: { color: 'rgba(30, 41, 59, 0.4)' } },
-      width: initialWidth,
-      height: 450,
-      crosshair: { mode: 0 }, 
-      timeScale: { timeVisible: true, borderColor: '#334155' },
-      rightPriceScale: { borderColor: '#334155' },
-    });
-
-    const newSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#1e293b', downColor: '#1e293b', borderUpColor: '#334155', borderDownColor: '#334155', wickUpColor: '#334155', wickDownColor: '#334155',
-    });
-
-    const zigzagSeries = chart.addSeries(LineSeries, {
-      color: '#38bdf8', lineWidth: 1, lineStyle: 2, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-    });
-
-    const exactTradeLine = chart.addSeries(LineSeries, {
-      color: '#a855f7', lineWidth: 2, lineStyle: 3, crosshairMarkerVisible: true, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null 
-    });
-
-    const entryHorizontal = chart.addSeries(LineSeries, {
-      color: "#fbbf24", lineWidth: 2, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
-    });
-
-    chartInstance.current = chart;
-    seriesInstance.current = newSeries;
-    zigzagSeriesRef.current = zigzagSeries;
-    exactTradeLineRef.current = exactTradeLine;
-    entryHorizontalSeriesRef.current = entryHorizontal;
-
-    const carregarHistorico = async () => {
-      const API_URL = backendHttpBase();
-      try {
-        const res = await fetch(`${API_URL}/api/historico`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.length > 0) {
-            const unique = [...data].sort((a, b) => a.time - b.time).filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
-            unique.forEach(candle => chartDataMap.current.set(candle.time, candle));
-
-            const safeCandles = unique.filter(c => 
-              c.time != null && c.open != null && c.high != null && c.low != null && c.close != null &&
-              !Number.isNaN(c.open) && !Number.isNaN(c.close)
-            );
-
-            const dimmedData = safeCandles.map(candle => {
-              const marker = markersRef.current.find(m => m.time === candle.time);
-              if (marker) return { ...candle, color: marker.color, wickColor: marker.color, borderColor: marker.color };
-              return candle; 
-            });
-
-            newSeries.setData(dimmedData);
-            zigzagSeries.setData(calculateZigZag(dimmedData, 0.8));
-            chart.timeScale().fitContent();
-            isDataLoaded.current = true;
-            markersSigRef.current = "";
-            if (markersRef.current.length > 0 && typeof newSeries.setMarkers === "function") {
-              const sorted = [...markersRef.current].sort((a, b) => a.time - b.time);
-              newSeries.setMarkers(prepareChartMarkers(sorted, chartDataMap.current));
-              markersSigRef.current = JSON.stringify(sorted);
-            }
-            if (entryHorizontalSeriesRef.current) {
-              const hData = buildEntryHorizontalLineData(markersRef.current, null, false, 0, chartDataMap.current);
-              try { entryHorizontalSeriesRef.current.setData(hData); } catch (_) {}
-            }
-          }
-        }
-      } catch (err) { console.error("Erro API:", err); }
-    };
-
-    carregarHistorico();
-
-    let requestAnimationFrameId = null;
-    chart.subscribeCrosshairMove((param) => {
-      if (requestAnimationFrameId) cancelAnimationFrame(requestAnimationFrameId);
-      requestAnimationFrameId = requestAnimationFrame(() => {
-        const tooltip = tooltipRef.current;
-        if (!param.time || param.point.x < 0 || param.point.y < 0 || !tooltip) {
-          tooltip.style.display = 'none';
-          if (currentHoverState.current !== "none") { exactTradeLine.setData([]); currentHoverState.current = "none"; }
-          return;
-        }
-
-        const hoveredMarker = markersRef.current.find(m => m.time === param.time);
-        const candleData = chartDataMap.current.get(param.time) || param.seriesData.get(newSeries);
-
-        if (hoveredMarker && candleData) {
-          tooltip.style.display = 'block';
-          tooltip.style.left = param.point.x + 15 + 'px';
-          tooltip.style.top = param.point.y + 15 + 'px';
-          
-          const isEntry = hoveredMarker.shape === 'circle';
-          const direction = hoveredMarker.text.includes('COMPRA') ? '⬆️ Compra (long)' : '⬇️ Venda (short)';
-          const result = hoveredMarker.text.includes('GANHO') ? '✅ Ganho' : (hoveredMarker.text.includes('PERDA') ? '❌ Perda' : '');
-          const rsiText = candleData.rsi ? candleData.rsi.toFixed(2) : 'Aguardando...';
-          const bbText = candleData.bb_width ? candleData.bb_width.toFixed(2) : 'Aguardando...';
-
-          tooltip.innerHTML = `
-            <div class="font-bold text-sm mb-1 ${hoveredMarker.color === '#22c55e' ? 'text-green-400' : 'text-red-400'}">
-              ${isEntry ? 'ESTADO IA: ENTRADA' : 'ESTADO IA: SAÍDA'}
-            </div>
-            <div class="text-xs text-white mb-1">Ação: ${isEntry ? direction : result}</div>
-            <div class="text-xs text-slate-300">${isEntry ? "Preço de entrada" : "Preço (fechamento)"}: US$ ${(hoveredMarker.price != null ? Number(hoveredMarker.price) : candleData.close).toFixed(2)}</div>
-            <div class="mt-2 pt-2 border-t border-slate-600 text-[10px] text-slate-400 font-mono">
-              RSI: ${rsiText}<br/>BB Largura: ${bbText}
-            </div>
-          `;
-
-          if (currentHoverState.current !== param.time) {
-            currentHoverState.current = param.time; 
-            
-            if (isEntry) {
-              const exitMarker = markersRef.current.find(m => m.time > param.time && m.shape === 'square');
-              if (exitMarker && exitMarker.time !== param.time) {
-                const exitCandle = chartDataMap.current.get(exitMarker.time);
-                const v1 = hoveredMarker.price != null ? Number(hoveredMarker.price) : candleData.close;
-                const v2 = exitCandle ? exitCandle.close : candleData.close;
-                if (v1 != null && v2 != null && !Number.isNaN(v1) && !Number.isNaN(v2)) {
-                  exactTradeLine.setData([{ time: param.time, value: v1 }, { time: exitMarker.time, value: v2 }]);
-                } else {
-                  exactTradeLine.setData([]);
-                }
-              }
-            } else {
-              const entryMarker = [...markersRef.current].reverse().find(m => m.time < param.time && m.shape === 'circle');
-              if (entryMarker && entryMarker.time !== param.time) {
-                const entryCandle = chartDataMap.current.get(entryMarker.time);
-                const v1 = entryMarker.price != null ? Number(entryMarker.price) : (entryCandle ? entryCandle.close : candleData.close);
-                const v2 = candleData.close;
-                if (v1 != null && v2 != null && !Number.isNaN(v1) && !Number.isNaN(v2)) {
-                  exactTradeLine.setData([{ time: entryMarker.time, value: v1 }, { time: param.time, value: v2 }]);
-                } else {
-                  exactTradeLine.setData([]);
-                }
-              }
-            }
-          }
-        } else {
-          tooltip.style.display = 'none';
-          if (currentHoverState.current !== "none") { exactTradeLine.setData([]); currentHoverState.current = "none"; }
-        }
-      });
-    });
-
-    const resizeObserver = new ResizeObserver(entries => {
-      if (entries.length === 0 || !chartInstance.current) return;
-      const { width, height } = entries[0].contentRect;
-      chartInstance.current.applyOptions({ width, height });
-    });
-    resizeObserver.observe(chartContainerRef.current);
-
-    return () => {
-      if (requestAnimationFrameId) cancelAnimationFrame(requestAnimationFrameId);
-      resizeObserver.disconnect();
-      chart.remove();
-      chartInstance.current = null;
-      entryHorizontalSeriesRef.current = null;
-    };
-  }, []); 
-
-  useEffect(() => {
-    if (isDataLoaded.current && seriesInstance.current && liveCandle?.time) {
-      chartDataMap.current.set(liveCandle.time, liveCandle); 
-      let cColor = '#1e293b'; 
-      const hasAction = markersRef.current.find(m => m.time === liveCandle.time);
-      if (hasAction) cColor = hasAction.color; 
-      
-      try { 
-        if (liveCandle.open != null && liveCandle.close != null && !Number.isNaN(liveCandle.close)) {
-            seriesInstance.current.update({ ...liveCandle, color: cColor, wickColor: cColor, borderColor: cColor }); 
-        }
-      } catch (e) {}
-    }
-  }, [liveCandle]);
-
-  useEffect(() => {
-    if (!isDataLoaded.current || !seriesInstance.current || markersData == null) return;
-    const sorted = [...markersData].sort((a, b) => a.time - b.time);
-    const sig = JSON.stringify(sorted);
-    if (sig === markersSigRef.current) return;
-    markersSigRef.current = sig;
-    try {
-      if (typeof seriesInstance.current.setMarkers === "function") {
-        seriesInstance.current.setMarkers(prepareChartMarkers(sorted, chartDataMap.current));
-      }
-    } catch (e) {}
-  }, [markersData]);
-
-  useEffect(() => {
-    if (!isDataLoaded.current || !entryHorizontalSeriesRef.current || markersData == null) return;
-    const lineData = buildEntryHorizontalLineData(markersData, liveCandle, inPosition, entryPrice, chartDataMap.current);
-    try {
-      const safeLineData = lineData.filter(p => p.value !== null && p.value !== undefined && !Number.isNaN(p.value));
-      entryHorizontalSeriesRef.current.setData(safeLineData);
-    } catch (e) {}
-  }, [markersData, liveCandle, inPosition, entryPrice, currentPosition]);
-
+function PriceTicker({ price }) {
+  const [tick, setTick] = useState({ price, dir: 0 });
+  if (price !== tick.price) setTick({ price, dir: price > tick.price ? 1 : -1 });
   return (
-    <div className="w-full relative rounded overflow-hidden" style={{ minHeight: '450px' }}>
-      <div 
-        ref={tooltipRef} 
-        className="absolute z-50 bg-slate-900/90 backdrop-blur border border-purple-500/50 p-3 rounded shadow-lg pointer-events-none transition-opacity duration-100"
-        style={{ display: 'none' }}
-      ></div>
-      <div ref={chartContainerRef} className="w-full h-112.5"></div>
+    <span key={price} className={`num text-xl font-black text-white sm:text-2xl ${tick.dir > 0 ? "flash-up" : tick.dir < 0 ? "flash-down" : ""}`}>
+      {price ? `$${fmtPrice(price)}` : "—"}
+    </span>
+  );
+}
+
+function FullScreenMessage({ icon: Icon, iconClass, title, children }) {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
+      <Icon className={`mb-4 ${iconClass}`} size={44} />
+      <p className="text-lg font-bold text-white">{title}</p>
+      <div className="mt-2 max-w-md text-sm text-slate-400">{children}</div>
     </div>
   );
 }
 
-// ==========================================
-// 📊 DASHBOARD PRINCIPAL
-// ==========================================
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [wsLive, setWsLive] = useState(false);
@@ -454,288 +54,210 @@ export default function Dashboard() {
     let cancelled = false;
     let wsConnected = false;
 
+    const apply = (next) =>
+      setData((prev) => (!prev || prev.error || JSON.stringify(prev) !== JSON.stringify(next) ? next : prev));
+
     const pullState = async () => {
-      if (wsConnected) return; 
+      if (wsConnected) return;
       try {
         const res = await fetch(`${httpBase}/api/state`);
-        if (res.ok && !cancelled) {
-            const text = await res.text();
-            if (!text) { setData({ error: "⚠️ API retornou resposta vazia (0 bytes)" }); setWsLive(false); return; }
-            try {
-                const newState = JSON.parse(text);
-                setData(prev => { if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState; return prev; });
-            } catch (jsonErr) { setData({ error: `❌ Resposta inválida da API (JSON quebrado): ${jsonErr.message}` }); setWsLive(false); }
-        } else if (!cancelled) { setData({ error: `❌ Servidor retornou HTTP ${res.status}. Pode estar iniciando ou offline.` }); setWsLive(false); }
-      } catch (err) { if (!cancelled) { setData({ error: `❌ Erro de rede/CORS: ${err.message}` }); setWsLive(false); } }
+        if (cancelled) return;
+        if (!res.ok) { setData({ error: `Servidor respondeu HTTP ${res.status}. Pode estar iniciando ou offline.` }); setWsLive(false); return; }
+        const text = await res.text();
+        if (!text) { setData({ error: "API retornou resposta vazia." }); setWsLive(false); return; }
+        apply(JSON.parse(text));
+      } catch (err) {
+        if (!cancelled) { setData({ error: `Erro de rede/CORS: ${err.message}` }); setWsLive(false); }
+      }
     };
 
     const connectWS = () => {
       if (cancelled) return;
       try {
         ws.current = new WebSocket(wsUrl);
-        ws.current.onopen = () => { if (cancelled) return; wsConnected = true; setWsLive(true); };
+        ws.current.onopen = () => { if (!cancelled) { wsConnected = true; setWsLive(true); } };
         ws.current.onmessage = (event) => {
           if (cancelled) return;
-          try {
-            const newState = JSON.parse(event.data);
-            setData(prev => { if (!prev || JSON.stringify(prev) !== JSON.stringify(newState)) return newState; return prev; });
-          } catch (err) { console.error("[WS] Parse error:", err); }
+          try { apply(JSON.parse(event.data)); } catch (err) { console.error("[WS] parse:", err); }
         };
         ws.current.onclose = () => {
           if (cancelled) return;
-          wsConnected = false;
-          setWsLive(false);
+          wsConnected = false; setWsLive(false);
           reconnectRef.current = setTimeout(connectWS, 3000);
         };
-        ws.current.onerror = () => { if (ws.current) ws.current.close(); };
-      } catch (err) { console.error("[WS] Falha crítica na inicialização:", err); }
+        ws.current.onerror = () => ws.current?.close();
+      } catch (err) { console.error("[WS] falha na inicialização:", err); }
     };
 
-    pullState(); 
-    connectWS(); 
-    const poll = setInterval(() => { if (cancelled) return; pullState(); }, 5000); 
-
+    pullState();
+    connectWS();
+    const poll = setInterval(pullState, 5000);
     return () => {
       cancelled = true;
       clearInterval(poll);
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      if (ws.current) ws.current.close();
+      ws.current?.close();
     };
   }, []);
 
   if (!data) {
     return (
-      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono">
-        <Activity className="animate-spin mb-4 text-blue-500" size={48} /> 
-        <p className="animate-pulse">Conectando à API... (1ª tentativa)</p>
-      </div>
+      <FullScreenMessage icon={Activity} iconClass="animate-spin text-accent" title="Conectando ao robô…">
+        O servidor gratuito pode levar até um minuto para acordar.
+      </FullScreenMessage>
     );
   }
 
   if (data.error) {
     return (
-      <div className="min-h-screen bg-[#0f172a] flex flex-col items-center justify-center text-white font-mono px-6 text-center max-w-lg">
-        <ShieldAlert className="mb-4 text-amber-500" size={48} />
-        <p className="text-lg font-bold text-white mb-2">Servidor não respondeu</p>
-        <p className="text-sm text-slate-400 mb-4">
-          O painel não conseguiu alcançar a API Python. Verifique se a variável <code className="text-cyan-400">NEXT_PUBLIC_API_URL</code> no seu painel da Vercel está configurada corretamente para o Render.
-        </p>
-        <p className="text-xs text-slate-500 font-mono break-all">Endereço tentado: {backendHttpBase()}</p>
-        <p className="text-xs text-red-400 mt-4 border border-red-500/30 bg-red-500/10 p-2 rounded">
-          Erro: {data.error}
-        </p>
-        <p className="text-xs text-slate-400 mt-4">Tentando novamente em 5 segundos...</p>
-      </div>
+      <FullScreenMessage icon={ShieldAlert} iconClass="text-warn" title="Servidor não respondeu">
+        <p>Verifique a variável <code className="text-accent">NEXT_PUBLIC_API_URL</code> na Vercel.</p>
+        <p className="num mt-3 break-all text-xs text-slate-500">Endereço: {backendHttpBase()}</p>
+        <p className="mt-3 rounded-lg border border-loss/30 bg-loss/10 p-2 text-xs text-loss">{data.error}</p>
+        <p className="mt-3 text-xs text-slate-500">Tentando novamente em 5 segundos…</p>
+      </FullScreenMessage>
     );
   }
 
-  const remainingSeconds = parseInt(data?.status?.match(/\d+/)?.[0] || 0);
-
-  // 🦅 DADOS DA VISÃO DE ÁGUIA (MACRO 4H)
-  const currentPrice = data?.last_candle?.close || 0;
-  // Fallback inteligente: Procura no objeto macro_trend ou nas propriedades da last_candle
-  const macroEma50 = data?.macro_trend?.ema50 || data?.macro_trend?.ema50_4h || data?.last_candle?.ema50_4h || 0;
-  const macroEma200 = data?.macro_trend?.ema200 || data?.macro_trend?.ema200_4h || data?.last_candle?.ema200_4h || 0;
-  const isBullish = currentPrice > macroEma200;
+  const risk = data.risk || {};
+  const live = data.last_candle || {};
+  const price = live.close || 0;
+  const ema50 = live.ema50_4h || 0;
+  const ema200 = live.ema200_4h || 0;
+  const bullish = price > ema200;
+  const balance = data.display_balance ?? data.balance ?? 0;
+  const start = data.starting_balance || 100;
+  const totalRet = (balance / start - 1) * 100;
+  const trades = (data.adaptation?.wins || 0) + (data.adaptation?.losses || 0);
+  const pf = risk.profit_factor;
 
   return (
-    <div className="min-h-screen bg-[#0f172a] p-6 text-slate-100 font-sans">
-      <header className="flex justify-between items-center mb-6 border-b border-slate-700/50 pb-4">
-        <h1 className="text-3xl font-black flex items-center gap-3 italic">
-          <Activity className="text-blue-500" /> IA TRADER PRO 
-          <span className="text-[10px] not-italic bg-blue-500/10 border border-blue-500/30 px-2 py-1 rounded text-blue-400">V3.0.1</span>
-        </h1>
-        <div className="flex flex-col items-end gap-1">
-          {!wsLive && (
-            <span className="text-[10px] font-mono text-amber-400 border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 rounded">
-              Aguardando conexão em tempo real... (HTTP Fallback)
+    <div className="mx-auto min-h-screen max-w-[1600px] overflow-x-clip px-4 py-5 sm:px-6 lg:px-8">
+      {/* ---------- Cabeçalho ---------- */}
+      <header className="mb-5 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-linear-to-br from-accent to-violet shadow-lg shadow-accent/20">
+            <TrendingUp size={20} className="text-ink" strokeWidth={2.6} />
+          </span>
+          <div>
+            <h1 className="text-lg font-black leading-tight tracking-tight text-white">IA Trader Pro</h1>
+            <p className="text-[11px] text-slate-500">Terminal de trading assistido por IA · BTC/USDT</p>
+          </div>
+          <span className="ml-1 hidden rounded-full border border-warn/30 bg-warn/10 px-2.5 py-1 text-[10px] font-bold text-warn sm:inline">
+            SIMULAÇÃO · sem dinheiro real
+          </span>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="eyebrow">Bitcoin</div>
+            <PriceTicker price={price} />
+          </div>
+          <div className="hidden h-9 w-px bg-line sm:block" />
+          <div className="flex flex-col items-end gap-1.5">
+            <span className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold ${
+              wsLive ? "border-gain/30 bg-gain/10 text-gain" : "border-warn/30 bg-warn/10 text-warn"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${wsLive ? "bg-gain animate-pulse" : "bg-warn"}`} />
+              {wsLive ? "Tempo real" : "Reconectando…"}
             </span>
-          )}
-          {wsLive && (
-            <span className="text-[10px] font-mono text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded animate-pulse">
-              Sincronizado (Tempo Real)
-            </span>
-          )}
-          <div className="bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 font-mono text-xs flex items-center gap-2">
-            <Clock size={14} className="text-blue-400"/> Tempo ativo: {data.uptime}
+            <span className="num flex items-center gap-1 text-[11px] text-slate-500"><Clock size={11} /> {data.uptime}</span>
           </div>
         </div>
       </header>
 
-     {/* GRID DE CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-        
-        {/* Ativo */}
-        <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 shadow-lg flex flex-col justify-between min-h-35">
-          <div className="text-slate-400 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-            <Bitcoin size={16} className="text-orange-500"/> Ativo
-          </div>
-          <div className="text-3xl lg:text-4xl font-black mt-auto font-mono uppercase text-white">
-            {data.asset}
-          </div>
-        </div>
+      {/* ---------- Indicadores ---------- */}
+      <section className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5 [&>*]:min-w-0">
+        <Kpi label="Patrimônio" value={fmtUsd(balance)} valueClass={tone(data.floating_pnl)}
+          sub={<span className={tone(totalRet)}>{fmtPct(totalRet)} desde o início</span>} />
+        <Kpi label="Resultado do dia" value={fmtPct(risk.daily_pnl_pct || 0)} valueClass={tone(risk.daily_pnl_pct)}
+          sub={`${risk.trades_today || 0} operação(ões) hoje`} />
+        <Kpi label="Taxa de acerto" value={trades ? `${data.adaptation?.current_win_rate ?? 0}%` : "—"}
+          sub={trades ? `${data.adaptation.wins} ganhos · ${data.adaptation.losses} perdas` : "sem operações ainda"} />
+        <Kpi label="Fator de lucro" value={pf > 0 ? pf.toFixed(2) : "—"} valueClass={pf >= 1 ? "text-gain" : pf > 0 ? "text-loss" : "text-white"}
+          sub={pf > 0 ? (pf >= 1 ? "ganhos superam perdas" : "perdas superam ganhos") : "aguardando histórico"} />
+        <Kpi label="Queda máxima" value={fmtPct(risk.max_drawdown_pct || 0)} valueClass={risk.max_drawdown_pct < 0 ? "text-loss" : "text-white"}
+          sub="pior recuo do patrimônio" />
+      </section>
 
-        {/* Card 2: Saldo Dinâmico */}
-        <div className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 shadow-lg relative overflow-hidden flex flex-col justify-between min-h-35">
-          {data.in_position && (
-            <div className={`absolute top-0 right-0 w-1.5 h-full ${data.floating_pnl >= 0 ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
-          )}
-          
-          <div className="text-slate-400 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-            <Wallet size={16}/> Patrimônio
-          </div>
-
-          <div className="mt-auto">
-            <div className={`text-3xl lg:text-4xl font-black font-mono ${data.floating_pnl > 0 ? 'text-green-400' : data.floating_pnl < 0 ? 'text-red-400' : 'text-white'}`}>
-              ${(data.display_balance || data.balance || 0).toFixed(2)}
-            </div>
-            {data.in_position && (
-              <div className={`text-xs font-mono font-bold mt-1 ${data.floating_pnl >= 0 ? 'text-green-500' : 'text-red-400'}`}>
-                {data.floating_pnl >= 0 ? '▲' : '▼'} ${(data.floating_pnl || 0).toFixed(2)}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Status / Cronômetro */}
-        <div className={`p-5 rounded-xl border shadow-lg transition-all duration-500 flex flex-col justify-between min-h-35 ${data.status.includes("PROTEÇÃO") ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 bg-slate-800/50'}`}>
-          <div className="text-slate-400 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-            <Zap size={16} className={data.status.includes("PROTEÇÃO") ? "text-blue-400 animate-pulse" : ""}/> 
-            Status Operacional
-          </div>
-          
-          <div className="mt-auto">
-            <div className="text-lg lg:text-xl font-bold uppercase tracking-tighter text-white">
-            {data?.status?.includes("PROTEÇÃO") ? "Trava de Maturação" : data?.status}
-            </div>
-          {data?.status?.includes("PROTEÇÃO") && (
-              <div className="mt-3 w-full">
-                <div className="flex justify-between text-xs font-mono text-blue-400 mb-1.5">
-                  <span>{remainingSeconds} s restantes</span>
-                  <span>900 s</span>
-                </div>
-                <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                   <div className="h-full bg-blue-500 transition-all duration-1000 ease-linear" style={{ width: `${(remainingSeconds / 900) * 100}%` }} />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* News */}
-        <NewsSentinel data={data.news_agent} />
-
-        {/* Protocolo (Atualizado com Título Fixo) */}
-        <div className="bg-linear-to-br from-purple-900/40 to-slate-900 p-5 rounded-xl border border-purple-500/30 shadow-lg flex flex-col justify-between min-h-35">
-          <div className="text-purple-300 text-xs font-bold uppercase tracking-widest flex items-center gap-2">
-            <Brain size={16}/> Protocolo
-          </div>
-          <div className="mt-auto">
-            <div className="text-3xl lg:text-4xl font-black font-mono text-white">
-              SNIPER PRO G8
-            </div>
-            <div className="mt-2 flex flex-col gap-1">
-              <div className="text-sm lg:text-base text-green-400 font-mono font-bold">
-                Acertos Reais: {data.adaptation?.current_win_rate || "0"}%
-              </div>
-              <div className="text-xs text-purple-400 font-mono font-semibold tracking-wide border-t border-purple-500/30 pt-1 mt-1">
-                Status: Motor ONNX Compilado
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Bloco do Gráfico com a HUD Macro embutida no topo */}
-        <div className="lg:col-span-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 shadow-lg flex flex-col">
-          
-          {/* 🦅 HUD DA VISÃO DE ÁGUIA (SEMÁFORO MACRO) */}
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-4 border-b border-slate-700/60 pb-3 gap-3">
-            <h2 className="text-xs font-black flex items-center gap-2 uppercase tracking-widest text-slate-300 shrink-0">
-              <Zap size={16} className="text-blue-500" /> Gráfico Tático (15m)
+      {/* ---------- Gráfico + Analista ---------- */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 [&>*]:min-w-0">
+        <section className="card flex flex-col overflow-hidden xl:col-span-9">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+              <Activity size={15} className="text-accent" /> Gráfico tático
             </h2>
-            
-            {macroEma200 > 0 ? (
-              <div className="flex items-center gap-3 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-slate-700/80 w-full md:w-auto">
-                <div className="flex items-center gap-2">
-                  <CircleDot size={12} className={isBullish ? 'text-green-500 animate-pulse' : 'text-red-500 animate-pulse'} />
-                  <span className={`text-[10px] font-bold uppercase tracking-widest ${isBullish ? 'text-green-400' : 'text-red-400'}`}>
-                    Macro: {isBullish ? 'Alta (Bull)' : 'Baixa (Bear)'}
-                  </span>
-                </div>
-                <div className="text-[10px] font-mono text-slate-400 border-l border-slate-700 pl-3 ml-1 hidden sm:block">
-                  EMA50(4H): <span className="text-white">${macroEma50.toFixed(2)}</span> <span className="mx-1 text-slate-600">|</span> EMA200(4H): <span className="text-white">${macroEma200.toFixed(2)}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest animate-pulse">
-                Sincronizando Visão Macro...
-              </div>
-            )}
-          </div>
-
-          <TradingChart 
-            liveCandle={data.last_candle} 
-            markersData={data.markers} 
-            inPosition={data.in_position} 
-            entryPrice={data.entry_price} 
-            currentPosition={data.current_position} 
-          />
-        </div>
-        
-        {/* Livro de Ações */}
-        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 h-120.5 flex flex-col shadow-lg custom-scrollbar">
-          <h2 className="text-xs font-black mb-4 flex items-center gap-2 border-b border-slate-700 pb-2 uppercase tracking-widest shrink-0">
-            <List size={16}/> Livro de Ações
-          </h2>
-          <div className="flex-1 overflow-y-auto pr-1">
-            {data.order_book && data.order_book.length > 0 ? (
-              <div className="space-y-2">
-                {data.order_book.map((order, i) => (
-                  <div key={i} className="bg-slate-900/50 p-2 rounded text-[10px] font-mono border border-slate-600/30 text-slate-300">
-                    {order.text}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500/50 space-y-3 pb-10">
-                <Activity size={32} className="animate-pulse text-slate-600" />
-                <span className="text-[10px] text-center px-4 font-mono uppercase tracking-widest">
-                  Registro vazio.<br/>O Sniper está na espreita...
+            {ema200 > 0 ? (
+              <div className="flex items-center gap-3 rounded-full border border-line bg-black/20 px-3 py-1.5">
+                <span className={`flex items-center gap-1.5 text-[11px] font-bold ${bullish ? "text-gain" : "text-loss"}`}>
+                  <CircleDot size={11} className="animate-pulse" /> Tendência macro: {bullish ? "alta" : "baixa"}
+                </span>
+                <span className="num hidden text-[10px] text-slate-500 md:inline">
+                  EMA50 4H {fmtPrice(ema50)} · EMA200 4H {fmtPrice(ema200)}
                 </span>
               </div>
+            ) : (
+              <span className="animate-pulse text-[11px] text-slate-500">Sincronizando visão macro…</span>
             )}
           </div>
-        </div>
+          <div className="min-h-0 flex-1">
+          <TradingChart
+            liveCandle={data.last_candle}
+            markersData={data.markers}
+            inPosition={data.in_position}
+            entryPrice={data.entry_price}
+            currentPosition={data.current_position}
+            risk={risk}
+          />
+          </div>
+        </section>
+
+        <aside className="flex min-w-0 flex-col gap-5 xl:col-span-3">
+          <NewsSentinel data={data.news_agent} />
+          <ControlCenter data={data} />
+        </aside>
       </div>
 
-      <DojoPanel state={data} />
+      {/* ---------- Livro de ações + Admin ---------- */}
+      <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3 [&>*]:min-w-0">
+        <section className="card flex h-80 flex-col p-4 lg:col-span-1">
+          <h2 className="mb-3 flex shrink-0 items-center gap-2 border-b border-line pb-3 text-sm font-bold text-white">
+            <List size={15} className="text-violet" /> Livro de ações
+          </h2>
+          <div className="thin-scroll flex-1 space-y-2 overflow-y-auto pr-1">
+            {data.order_book?.length ? (
+              data.order_book.map((o, i) => {
+                const m = o.text.match(/^\[(.*?)\]\s*(.*)$/);
+                return (
+                  <div key={i} className="rounded-lg border border-line bg-black/20 px-3 py-2 text-[11px] leading-snug text-slate-300">
+                    {m && <span className="num mr-2 text-slate-500">{m[1]}</span>}{m ? m[2] : o.text}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-slate-600">
+                <ShieldCheck size={26} />
+                <span className="text-xs">Nenhuma operação ainda.<br />O robô só entra quando a convicção é alta.</span>
+              </div>
+            )}
+          </div>
+        </section>
 
-      <footer className="mt-12 pt-8 border-t border-slate-700/60 flex flex-col md:flex-row items-center justify-between gap-6 text-slate-500 text-sm">
-        <p className="text-center md:text-left leading-relaxed">
-          © {new Date().getFullYear()}{' '}
-          <span className="text-slate-400">Otávio Henrique Filgueiras dos Santos</span>
-          <span className="block text-xs text-slate-600 mt-1">IA Trader Pro — monitoramento e simulação. Uso por sua conta e risco.</span>
+        <div className="lg:col-span-2"><AdminPanel model={data.model} /></div>
+      </div>
+
+      <footer className="mt-10 flex flex-col items-center justify-between gap-4 border-t border-line pt-6 text-sm text-slate-500 md:flex-row">
+        <p className="text-center leading-relaxed md:text-left">
+          © {new Date().getFullYear()} <span className="text-slate-400">Otávio Henrique Filgueiras dos Santos</span>
+          <span className="mt-1 block text-xs text-slate-600">IA Trader Pro — monitoramento e simulação. Não é recomendação de investimento.</span>
         </p>
         <nav className="flex items-center gap-5" aria-label="Redes sociais">
-          <a
-            href="https://www.linkedin.com/in/otaviohenrique-dev/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 text-slate-400 hover:text-[#0A66C2] transition-colors"
-          >
-            <Linkedin size={20} aria-hidden />
-            <span className="text-xs font-semibold tracking-wide">LinkedIn</span>
+          <a href="https://www.linkedin.com/in/otaviohenrique-dev/" target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-2 text-slate-400 transition-colors hover:text-[#4aa3ff]">
+            <Linkedin size={18} aria-hidden /> <span className="text-xs font-semibold">LinkedIn</span>
           </a>
-          <a
-            href="https://github.com/otaviohenrique-dev-web"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors"
-          >
-            <Github size={20} aria-hidden />
-            <span className="text-xs font-semibold tracking-wide">GitHub</span>
+          <a href="https://github.com/otaviohenrique-dev-web" target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-2 text-slate-400 transition-colors hover:text-white">
+            <Github size={18} aria-hidden /> <span className="text-xs font-semibold">GitHub</span>
           </a>
         </nav>
       </footer>

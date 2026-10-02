@@ -183,7 +183,14 @@ def sync_public_state():
         "wins": tr["wins"], "losses": tr["losses"],
         "current_win_rate": round(tr["wins"] / n * 100, 1) if n else 0.0})
     day_pnl = tr["balance"] / tr["day_start_balance"] - 1 if tr["day_start_balance"] else 0.0
+    state["starting_balance"] = STARTING_BALANCE
+    state["model"] = {"name": os.path.basename(MODEL_PATH) if MODEL_PATH else "", "loaded": onnx_session is not None,
+                      "paper_trading": True}
     state["risk"].update({
+        "max_trades_per_day": F.MAX_TRADES_PER_DAY, "daily_loss_limit_pct": DAILY_LOSS_LIMIT * 100,
+        "cooldown_left": tr["cooldown"], "cooldown_bars": F.COOLDOWN_BARS,
+        "stop_loss_pct": F.STOP_LOSS_PCT * 100, "take_profit_pct": F.TAKE_PROFIT_PCT * 100,
+        "conf_threshold": CONF_THRESHOLD, "entries_blocked": entry_block_reason(),
         "trades_today": tr["trades_today"], "daily_pnl_pct": round(day_pnl * 100, 2),
         "max_drawdown_pct": round(tr["max_dd"] * 100, 2),
         "profit_factor": round(tr["gross_win"] / tr["gross_loss"], 2) if tr["gross_loss"] > 0 else 0.0})
