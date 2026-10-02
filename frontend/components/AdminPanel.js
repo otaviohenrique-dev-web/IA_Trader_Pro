@@ -102,7 +102,7 @@ export default function AdminPanel({ model }) {
 
         <div className="flex flex-col gap-2">
           <label className="eyebrow flex items-center gap-1.5"><Upload size={12} /> Injetar cérebro</label>
-          <span className="text-[10px] text-slate-500">Atual: {model?.name || "nenhum"} · envie o .onnx e o .stats.json juntos</span>
+          <span className="text-[10px] text-slate-500">Atual: {model?.name || "nenhum"} · envie gen_N.onnx e gen_N.json juntos</span>
           <input type="file" multiple accept=".onnx,.json" onChange={(e) => setFiles(Array.from(e.target.files || []))}
             className="text-[11px] text-slate-400 file:mr-2 file:rounded-md file:border-0 file:bg-white/10 file:px-2 file:py-1 file:text-slate-200" />
           <button type="button" onClick={upload} disabled={loading || !files.length}

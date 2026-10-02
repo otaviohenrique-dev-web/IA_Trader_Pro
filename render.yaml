@@ -13,6 +13,7 @@ services:
     healthCheckPath: /health
 
     plan: free
+    region: frankfurt        # Ohio (EUA) é bloqueado pela Binance
 
     envVars:
       - key: PYTHON_VERSION
@@ -21,8 +22,6 @@ services:
         value: "true"
       - key: WEB_CONCURRENCY
         value: "1"
-      - key: CONF_THRESHOLD
-        value: "0.5"
       - key: GEMINI_API_KEY
         sync: false
       - key: CRYPTOCOMPARE_API_KEY
@@ -43,7 +42,7 @@ services:
       - key: STARTING_BALANCE
         value: "1000"
       - key: KILL_SWITCH_DD
-        value: "0.10"
+        value: "0.25"      # acima da queda histórica aceita do candidato (~23%)
       # Opcional: URL do frontend na Vercel para restringir o CORS (ex.: https://meuapp.vercel.app)
       - key: FRONTEND_URL
         sync: false

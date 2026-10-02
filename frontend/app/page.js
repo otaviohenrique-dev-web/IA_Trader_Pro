@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Activity, CircleDot, Clock, Github, Linkedin, List, ShieldAlert, ShieldCheck, TrendingUp } from "lucide-react";
+import { Activity, Briefcase, CircleDot, Clock, Github, Linkedin, List, ShieldAlert, ShieldCheck, TrendingUp } from "lucide-react";
 import NewsSentinel from "../components/NewsSentinel";
 import ControlCenter from "../components/ControlCenter";
+import AssetRadar from "../components/AssetRadar";
 import TradingChart from "../components/TradingChart";
 import AdminPanel from "../components/AdminPanel";
 import { backendHttpBase, backendWsUrl } from "../lib/api";
@@ -47,6 +48,7 @@ export default function Dashboard() {
   const [wsLive, setWsLive] = useState(false);
   const ws = useRef(null);
   const reconnectRef = useRef(null);
+  const [selected, setSelected] = useState("BTC");
 
   useEffect(() => {
     const httpBase = backendHttpBase();
@@ -120,11 +122,13 @@ export default function Dashboard() {
   }
 
   const risk = data.risk || {};
-  const live = data.last_candle || {};
-  const price = live.close || 0;
-  const ema50 = live.ema50_4h || 0;
-  const ema200 = live.ema200_4h || 0;
-  const bullish = price > ema200;
+  const pf0 = data.portfolio || {};
+  const cur = pf0.assets?.[selected] || {};
+  const price = cur.price || 0;
+  const ema50 = cur.ema50 || 0;
+  const ema200 = cur.ema200 || 0;
+  const bullish = pf0.regime_ok === true;
+  const positions = pf0.positions || [];
   const balance = data.display_balance ?? data.balance ?? 0;
   const start = data.starting_balance || 100;
   const totalRet = (balance / start - 1) * 100;
@@ -141,7 +145,7 @@ export default function Dashboard() {
           </span>
           <div>
             <h1 className="text-lg font-black leading-tight tracking-tight text-white">IA Trader Pro</h1>
-            <p className="text-[11px] text-slate-500">Terminal de trading assistido por IA · BTC/USDT</p>
+            <p className="text-[11px] text-slate-500">Terminal de trading assistido por IA · BTC, ETH, BNB e XRP</p>
           </div>
           <span className="ml-1 hidden rounded-full border border-warn/30 bg-warn/10 px-2.5 py-1 text-[10px] font-bold text-warn sm:inline">
             SIMULAÇÃO · sem dinheiro real
@@ -150,7 +154,7 @@ export default function Dashboard() {
 
         <div className="flex items-center gap-4">
           <div className="text-right">
-            <div className="eyebrow">Bitcoin</div>
+            <div className="eyebrow">{selected}/USDT</div>
             <PriceTicker price={price} />
           </div>
           <div className="hidden h-9 w-px bg-line sm:block" />
@@ -179,6 +183,8 @@ export default function Dashboard() {
           sub="pior recuo do patrimônio" />
       </section>
 
+      <div className="mb-5"><AssetRadar portfolio={pf0} selected={selected} onSelect={setSelected} /></div>
+
       {/* ---------- Gráfico + Analista ---------- */}
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 [&>*]:min-w-0">
         <section className="card flex flex-col overflow-hidden xl:col-span-9">
@@ -186,14 +192,23 @@ export default function Dashboard() {
             <h2 className="flex items-center gap-2 text-sm font-bold text-white">
               <Activity size={15} className="text-accent" /> Gráfico tático
             </h2>
-            {ema200 > 0 ? (
+            <div className="flex gap-1">
+              {Object.keys(pf0.assets || { BTC: 1 }).map((a) => (
+                <button key={a} type="button" onClick={() => setSelected(a)}
+                  className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                    selected === a ? "border-accent/50 bg-accent/10 text-accent" : "border-line text-slate-400 hover:text-slate-200"}`}>{a}</button>
+              ))}
+            </div>
+            {pf0.regime_ok != null ? (
               <div className="flex items-center gap-3 rounded-full border border-line bg-black/20 px-3 py-1.5">
                 <span className={`flex items-center gap-1.5 text-[11px] font-bold ${bullish ? "text-gain" : "text-loss"}`}>
-                  <CircleDot size={11} className="animate-pulse" /> Tendência macro: {bullish ? "alta" : "baixa"}
+                  <CircleDot size={11} className="animate-pulse" /> Regime do BTC: {bullish ? "alta (pode comprar)" : "baixa (sem entradas)"}
                 </span>
-                <span className="num hidden text-[10px] text-slate-500 md:inline">
-                  EMA50 4H {fmtPrice(ema50)} · EMA200 4H {fmtPrice(ema200)}
-                </span>
+                {ema200 > 0 && (
+                  <span className="num hidden text-[10px] text-slate-500 md:inline">
+                    {selected}: EMA50 4H {fmtPrice(ema50)} · EMA200 4H {fmtPrice(ema200)}
+                  </span>
+                )}
               </div>
             ) : (
               <span className="animate-pulse text-[11px] text-slate-500">Sincronizando visão macro…</span>
@@ -201,12 +216,13 @@ export default function Dashboard() {
           </div>
           <div className="min-h-0 flex-1">
           <TradingChart
-            liveCandle={data.last_candle}
-            markersData={data.markers}
-            inPosition={data.in_position}
-            entryPrice={data.entry_price}
-            currentPosition={data.current_position}
-            risk={risk}
+            key={selected}
+            asset={selected}
+            liveCandle={cur.candle}
+            markersData={data.markers?.[selected]}
+            position={cur.position}
+            ema50={ema50}
+            ema200={ema200}
           />
           </div>
         </section>
@@ -217,8 +233,45 @@ export default function Dashboard() {
         </aside>
       </div>
 
-      {/* ---------- Livro de ações + Admin ---------- */}
+      {/* ---------- Posições abertas + Livro de ações ---------- */}
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-3 [&>*]:min-w-0">
+        <section className="card p-4 lg:col-span-2">
+          <h2 className="mb-3 flex items-center gap-2 border-b border-line pb-3 text-sm font-bold text-white">
+            <Briefcase size={15} className="text-accent" /> Posições abertas
+            <span className="text-[10px] font-medium text-slate-500">· {positions.length} de {risk.max_positions || 3}</span>
+          </h2>
+          {positions.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="eyebrow text-left">
+                    <th className="pb-2 font-bold">Par</th><th className="pb-2 text-right font-bold">Entrada</th><th className="pb-2 text-right font-bold">Preço</th>
+                    <th className="pb-2 text-right font-bold">Resultado</th><th className="pb-2 text-right font-bold">Stop</th><th className="pb-2 text-right font-bold">Alvo</th>
+                    <th className="pb-2 text-right font-bold">Tempo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.map((p) => (
+                    <tr key={p.asset} className="num cursor-pointer border-t border-line hover:bg-white/5" onClick={() => setSelected(p.asset)}>
+                      <td className="py-2.5 font-bold text-white">{p.asset}</td>
+                      <td className="py-2.5 text-right text-slate-300">{fmtPrice(p.entry)}</td>
+                      <td className="py-2.5 text-right text-slate-300">{fmtPrice(p.price)}</td>
+                      <td className={`py-2.5 text-right font-bold ${tone(p.pnl_pct)}`}>{fmtPct(p.pnl_pct)} <span className="font-normal opacity-70">({fmtUsd(p.pnl_usd)})</span></td>
+                      <td className="py-2.5 text-right text-loss">{fmtPrice(p.stop)}</td>
+                      <td className="py-2.5 text-right text-gain">{fmtPrice(p.tp)}</td>
+                      <td className="py-2.5 text-right text-slate-400">{p.bars_held}/{p.hold_max} velas</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="py-6 text-center text-xs text-slate-500">
+              Nenhuma posição aberta. O robô só compra quando o ganho esperado passa do limiar e o BTC está em regime de alta.
+            </p>
+          )}
+        </section>
+
         <section className="card flex h-80 flex-col p-4 lg:col-span-1">
           <h2 className="mb-3 flex shrink-0 items-center gap-2 border-b border-line pb-3 text-sm font-bold text-white">
             <List size={15} className="text-violet" /> Livro de ações
@@ -236,14 +289,15 @@ export default function Dashboard() {
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-slate-600">
                 <ShieldCheck size={26} />
-                <span className="text-xs">Nenhuma operação ainda.<br />O robô só entra quando a convicção é alta.</span>
+                <span className="text-xs">Nenhuma operação ainda.<br />O robô só compra quando vê vantagem clara.</span>
               </div>
             )}
           </div>
         </section>
 
-        <div className="lg:col-span-2"><AdminPanel model={data.model} /></div>
       </div>
+
+      <div className="mt-5"><AdminPanel model={data.model} /></div>
 
       <footer className="mt-10 flex flex-col items-center justify-between gap-4 border-t border-line pt-6 text-sm text-slate-500 md:flex-row">
         <p className="text-center leading-relaxed md:text-left">

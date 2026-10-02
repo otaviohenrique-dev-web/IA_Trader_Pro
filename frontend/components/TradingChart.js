@@ -58,7 +58,7 @@ function toChartMarkers(markers) {
     });
 }
 
-export default function TradingChart({ liveCandle, markersData, inPosition, entryPrice, currentPosition, risk }) {
+export default function TradingChart({ asset = "BTC", liveCandle, markersData, position, ema50, ema200 }) {
   const containerRef = useRef(null);
   const tooltipRef = useRef(null);
   const chartRef = useRef(null);
@@ -121,7 +121,7 @@ export default function TradingChart({ liveCandle, markersData, inPosition, entr
     let retry = null;
     const loadHistory = async () => {
       try {
-        const res = await fetch(`${backendHttpBase()}/api/historico`);
+        const res = await fetch(`${backendHttpBase()}/api/historico?asset=${asset}`);
         const data = res.ok ? await res.json() : [];
         if (cancelled) return;
         const candles = (data || [])
@@ -183,7 +183,7 @@ export default function TradingChart({ liveCandle, markersData, inPosition, entr
       chartRef.current = seriesRef.current = zigzagRef.current = tradeLineRef.current = markersPluginRef.current = null;
       linesRef.current = {};
     };
-  }, []);
+  }, [asset]);
 
   // ---------- vela ao vivo ----------
   useEffect(() => {
@@ -207,26 +207,23 @@ export default function TradingChart({ liveCandle, markersData, inPosition, entr
     if (price > 0) linesRef.current[key] = s.createPriceLine({ price, axisLabelVisible: true, lineWidth: 1, ...opts });
   };
 
-  // ---------- linhas da posição aberta: entrada, stop e alvo ----------
-  const slPct = (risk?.stop_loss_pct ?? 1) / 100;
-  const tpPct = (risk?.take_profit_pct ?? 2) / 100;
+  // ---------- linhas da posição aberta: entrada, stop e alvo (valores reais da posição) ----------
+  const pEntry = position?.entry || 0, pStop = position?.stop || 0, pTp = position?.tp || 0;
   useEffect(() => {
     if (!ready) return;
-    const on = inPosition && entryPrice > 0 && currentPosition !== 0;
-    const side = currentPosition === 1 ? 1 : -1;
-    setLine("entry", on ? entryPrice : 0, { color: "#fbbf24", lineWidth: 2, lineStyle: LineStyle.Solid, title: "ENTRADA" });
-    setLine("sl", on ? entryPrice * (1 - side * slPct) : 0, { color: LOSS, lineStyle: LineStyle.Dashed, title: "STOP" });
-    setLine("tp", on ? entryPrice * (1 + side * tpPct) : 0, { color: GAIN, lineStyle: LineStyle.Dashed, title: "ALVO" });
-  }, [ready, inPosition, entryPrice, currentPosition, slPct, tpPct]);
+    setLine("entry", pEntry, { color: "#fbbf24", lineWidth: 2, lineStyle: LineStyle.Solid, title: "ENTRADA" });
+    setLine("sl", pStop, { color: LOSS, lineStyle: LineStyle.Dashed, title: "STOP" });
+    setLine("tp", pTp, { color: GAIN, lineStyle: LineStyle.Dashed, title: "ALVO" });
+  }, [ready, pEntry, pStop, pTp]);
 
   // ---------- médias macro 4H ----------
-  const ema50 = liveCandle?.ema50_4h || 0;
-  const ema200 = liveCandle?.ema200_4h || 0;
+  const e50 = ema50 ? Number(ema50.toPrecision(5)) : 0;
+  const e200 = ema200 ? Number(ema200.toPrecision(5)) : 0;
   useEffect(() => {
     if (!ready) return;
-    setLine("ema50", showEma ? ema50 : 0, { color: "rgba(56,189,248,0.7)", lineStyle: LineStyle.SparseDotted, title: "EMA50 4H" });
-    setLine("ema200", showEma ? ema200 : 0, { color: "rgba(167,139,250,0.8)", lineStyle: LineStyle.SparseDotted, title: "EMA200 4H" });
-  }, [ready, showEma, ema50, ema200]);
+    setLine("ema50", showEma ? e50 : 0, { color: "rgba(56,189,248,0.7)", lineStyle: LineStyle.SparseDotted, title: "EMA50 4H" });
+    setLine("ema200", showEma ? e200 : 0, { color: "rgba(167,139,250,0.8)", lineStyle: LineStyle.SparseDotted, title: "EMA200 4H" });
+  }, [ready, showEma, e50, e200]);
 
   useEffect(() => { zigzagRef.current?.applyOptions({ visible: showZigzag }); }, [showZigzag, ready]);
 
@@ -234,8 +231,8 @@ export default function TradingChart({ liveCandle, markersData, inPosition, entr
   const shown = hover || liveCandle;
   const chg = shown?.open ? ((shown.close - shown.open) / shown.open) * 100 : 0;
   const up = chg >= 0;
-  const floating = inPosition && entryPrice > 0 && liveCandle?.close
-    ? currentPosition * ((liveCandle.close - entryPrice) / entryPrice) * 100 : 0;
+  const inPosition = pEntry > 0;
+  const floating = inPosition && liveCandle?.close ? ((liveCandle.close - pEntry) / pEntry) * 100 : 0;
 
   const toggle = (on) =>
     `pointer-events-auto flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
@@ -246,8 +243,8 @@ export default function TradingChart({ liveCandle, markersData, inPosition, entr
     <div className="relative h-full min-h-[440px] sm:min-h-[540px]">
       <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[50%] sm:max-w-[70%]">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-sm font-bold text-white">BTC/USDT</span>
-          <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">15m</span>
+          <span className="text-sm font-bold text-white">{asset}/USDT</span>
+          <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">4H</span>
           {shown?.close != null && (
             <span className={`num text-xs font-semibold ${up ? "text-gain" : "text-loss"}`}>{fmtPct(chg)}</span>
           )}
@@ -266,7 +263,7 @@ export default function TradingChart({ liveCandle, markersData, inPosition, entr
         {inPosition && (
           <span className={`num mr-1 hidden rounded-lg border px-2.5 py-1.5 sm:inline text-[11px] font-bold ${
             floating >= 0 ? "border-gain/40 bg-gain/10 text-gain" : "border-loss/40 bg-loss/10 text-loss"}`}>
-            {currentPosition === 1 ? "LONG" : "SHORT"} {fmtPct(floating)}
+            COMPRADO {fmtPct(floating)}
           </span>
         )}
         <button type="button" className={toggle(showEma)} onClick={() => setShowEma((v) => !v)} title="Médias macro 4H">

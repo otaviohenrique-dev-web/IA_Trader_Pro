@@ -68,6 +68,7 @@ backend/models/*.onnx
 
 # 👇 EXCEÇÃO DE OURO: Mantém APENAS o Cérebro da Gen atual 👇
 !backend/models/sniper_pro_gen_*.onnx
+!backend/models/gen_*.onnx
 
 # stats de normalização: só a do modelo em produção
 backend/models/*.stats.json

@@ -1,8 +1,6 @@
 import asyncio
 import copy
 import csv
-import gc
-import glob
 import hmac
 import io
 import json
@@ -12,19 +10,16 @@ import re
 import time
 import warnings
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 import aiohttp
-import ccxt.async_support as ccxt
 import numpy as np
-import onnxruntime as ort
-import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
-import features as F
+import live_model as L
+from engine import KILL_SWITCH_DD, MODELS_DIR, POLL_SECONDS, STARTING_BALANCE, Engine
 
 warnings.filterwarnings("ignore")
 load_dotenv()
@@ -48,28 +43,16 @@ def clean_nans(obj):
 
 
 # --- CONFIGURAÇÃO ---
-SYMBOL = 'BTC/USDT'
-TIMEFRAME = '15m'
-MODELS_DIR = "models"
-POLL_SECONDS = 30                       # consulta preço/stop; a rede só decide 1x por vela fechada
-WARMUP_BARS = 96                        # velas reprocessadas para aquecer a memória da LSTM
-CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", 0.5))
-DAILY_LOSS_LIMIT = float(os.environ.get("DAILY_LOSS_LIMIT", -0.03))   # bloqueia novas entradas no dia
-STARTING_BALANCE = float(os.environ.get("STARTING_BALANCE", 1000.0))
-KILL_SWITCH_DD = float(os.environ.get("KILL_SWITCH_DD", 0.10))      # queda desde o pico que pausa TUDO
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-BREAKER_MOVE = float(os.environ.get("BREAKER_MOVE", 0.03))        # |variação de 1h| >= 3% pausa novas entradas
-BREAKER_PAUSE_S = int(float(os.environ.get("BREAKER_PAUSE_H", 2)) * 3600)
-
 CRYPTOCOMPARE_KEY = os.environ.get("CRYPTOCOMPARE_API_KEY") or os.environ.get("CRYPTOCOMPARE_KEY") or ""
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 ADMIN_PASS = os.environ.get("ADMIN_PASSWORD")
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
 STATE_FILE = os.environ.get("STATE_FILE", "data/live_state.json")
-STATE_KEY = "ia_trader_pro:state"
+STATE_KEY = "ia_trader_pro:state:v2"
 
 if not GEMINI_KEY:
     print(">>> ⚠️ GEMINI_API_KEY ausente: Sentinela de notícias opera em modo técnico.")
@@ -77,86 +60,89 @@ if not ADMIN_PASS:
     print(">>> ⚠️ ADMIN_PASSWORD ausente: endpoints administrativos ficam BLOQUEADOS.")
 
 
-def rotulo_risco_analista(codigo: str) -> str:
-    return {"SAFE": "seguro", "CAUTION": "atenção", "DANGER": "perigo", "MODO TÉCNICO": "modo técnico"}.get(codigo, codigo)
+# --- ALERTAS (Telegram) ---
+async def _send_telegram(text):
+    """Envia ao Telegram. Retorna (ok, detalhe); o detalhe nunca contém o token."""
+    if not (TG_TOKEN and TG_CHAT):
+        return False, "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID não configurados no servidor"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
+            async with sess.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT, "text": text}) as r:
+                if r.status == 200:
+                    return True, ""
+                try:
+                    desc = (await r.json()).get("description", "")
+                except Exception:
+                    desc = ""
+                return False, f"Telegram respondeu HTTP {r.status}: {desc}"
+    except Exception as e:
+        print(f">>> ⚠️ Telegram indisponível: {type(e).__name__}")
+        return False, f"falha de rede ({type(e).__name__})"
 
 
-def find_latest_model():
-    """MODEL_PATH do ambiente, senão a maior geração disponível em models/."""
-    env_path = os.environ.get("MODEL_PATH")
-    if env_path and os.path.exists(env_path):
-        return env_path
-    paths = glob.glob(os.path.join(MODELS_DIR, "sniper_pro_gen_*.onnx"))
-    key = lambda p: int(m.group(1)) if (m := re.search(r"gen_(\d+)", p)) else -1
-    return max(paths, key=key) if paths else None
+def notify(text):
+    """Alerta no Telegram (silencioso se não configurado ou fora do loop de eventos)."""
+    try:
+        asyncio.get_running_loop().create_task(_send_telegram(text))
+    except RuntimeError:
+        pass
 
 
-MODEL_PATH = find_latest_model()
-
-# --- ESTADO DE TRADING (persistido) ---
-tr = {
-    "balance": STARTING_BALANCE, "position": 0, "entry_price": 0.0, "trade_start_balance": STARTING_BALANCE,
-    "wins": 0, "losses": 0, "gross_win": 0.0, "gross_loss": 0.0,
-    "cooldown": 0, "day": "", "day_start_balance": STARTING_BALANCE, "trades_today": 0,
-    "peak": STARTING_BALANCE, "max_dd": 0.0, "last_bar_ts": 0,
-    "halted": False,               # kill-switch: só volta com /api/resume (admin)
-    "breaker_until": 0.0,          # freio de volatilidade: sem novas entradas até este instante (epoch s)
-    "news_at_open": "SAFE", "open_ts": 0,
-    "trade_log": [],               # últimos trades com o status do Analista no momento da entrada (modo sombra)
-    "news_events": [],             # leituras do Analista que teriam bloqueado entradas
-}
-
+# --- ESTADO PÚBLICO ---
 state = {
-    "asset": SYMBOL, "is_online": True, "in_position": False, "entry_price": 0.0, "current_position": 0,
-    "balance": STARTING_BALANCE, "floating_pnl": 0.0, "display_balance": STARTING_BALANCE,
-    "status": "Reiniciando o sistema...", "started_at": time.time(), "uptime": "00:00:00",
-    "last_candle": {}, "chart_data": [], "markers": [], "order_book": [],
-    "adaptation": {"generation": 1, "learning_state": "SISTEMA REINICIADO", "initial_win_rate": 0.0,
-                   "current_win_rate": 0.0, "wins": 0, "losses": 0},
+    "is_online": True, "started_at": time.time(), "uptime": "00:00:00", "status": "Reiniciando o sistema...",
+    "starting_balance": STARTING_BALANCE, "balance": STARTING_BALANCE, "display_balance": STARTING_BALANCE, "floating_pnl": 0.0,
+    "portfolio": {}, "markers": {}, "order_book": [],
+    "adaptation": {"generation": 0, "wins": 0, "losses": 0, "current_win_rate": 0.0},
+    "model": {"name": "", "loaded": False, "paper_trading": True},
     "news_agent": {"status": "INICIALIZANDO...", "sentiment_score": 0.0, "risk_level": "BAIXO",
-                   "reason": "Aguardando primeira leitura do mercado...", "last_headlines": []},
-    "risk": {"trades_today": 0, "daily_pnl_pct": 0.0, "max_drawdown_pct": 0.0, "profit_factor": 0.0,
-             "confidence": 0.0, "conf_threshold": CONF_THRESHOLD, "entries_blocked": ""},
-    "performance": {"loop_avg_ms": 0.0, "loop_max_ms": 0.0, "healthy": True, "status": "OK"},
+                   "reason": "Aguardando primeira leitura do mercado...", "last_headlines": [], "mode": "observação"},
+    "risk": {},
 }
-
-onnx_session = None
-norm_stats = None
-exchange = None
-lstm_states = None
-feat_row = {}                  # últimos indicadores (para o painel)
-last_analysis_time = 0
-cached_analysis = {"score": 0.1, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
-global_safe_state_str = '{"status": "Aguardando sincronização neural..."}'
-persist_dirty = False
+engine = Engine(notify, lambda: state["news_agent"]["status"])
+global_safe_state_str = '{"status": "Aguardando sincronização..."}'
 
 
-def update_safe_state():
+def refresh_state():
     global global_safe_state_str
     try:
+        pub = engine.public()
+        st, cfg = engine.st, engine.cfg or {}
+        m = re.search(r"gen_(\d+)", engine.pkg or "")
+        state.update({
+            "status": pub["headline"], "balance": st["eq"], "display_balance": pub["equity"], "floating_pnl": pub["unrealized"],
+            "portfolio": pub, "markers": st["markers"], "order_book": st["order_book"][:60],
+        })
+        state["model"] = {"name": engine.pkg or "", "loaded": engine.loaded, "paper_trading": True, "thr": cfg.get("thr"),
+                          "status": cfg.get("status", ""), "selftest": engine.selftest, "source": engine.ex_name}
+        state["adaptation"] = {"generation": int(m.group(1)) if m else 0, **{k: pub["stats"][k] for k in ("wins", "losses")},
+                               "current_win_rate": pub["stats"]["win_rate"]}
+        state["risk"] = {
+            "trades_today": pub["stats"]["trades_today"], "max_trades_per_day": L.CFG["max_trades_day"],
+            "daily_pnl_pct": pub["stats"]["daily_pnl_pct"], "daily_loss_limit_pct": L.CFG["daily_loss"] * 100,
+            "max_drawdown_pct": pub["stats"]["max_dd_pct"], "profit_factor": pub["stats"]["profit_factor"],
+            "entries_blocked": engine.block_reason() if engine.loaded else "", "halted": st["halted"],
+            "kill_switch_pct": KILL_SWITCH_DD * 100, "risk_per_trade_pct": cfg.get("risk", 0) * 100,
+            "max_positions": L.CFG["max_pos"], "open_positions": len(st["positions"]),
+        }
         safe = clean_nans(copy.deepcopy(state))
-        safe["markers"] = safe["markers"][-60:]
-        safe["order_book"] = safe["order_book"][:60]
         global_safe_state_str = json.dumps(safe)
     except Exception as e:
-        print(f">>> ❌ Erro ao sanitizar estado: {e}")
+        print(f">>> ❌ Erro ao montar o estado: {type(e).__name__}: {e}")
 
 
 # --- PERSISTÊNCIA (Render free tem disco efêmero: use Upstash Redis p/ sobreviver a reinícios) ---
 async def persist_save():
-    global persist_dirty
-    payload = json.dumps(clean_nans({"tr": tr, "markers": state["markers"][-60:],
-                                     "order_book": state["order_book"][:60]}))
+    payload = json.dumps(clean_nans(engine.dump()))
     try:
         if UPSTASH_URL and UPSTASH_TOKEN:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-                await s.post(UPSTASH_URL, headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
-                             json=["SET", STATE_KEY, payload])
+                await s.post(UPSTASH_URL, headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"}, json=["SET", STATE_KEY, payload])
         else:
             os.makedirs(os.path.dirname(STATE_FILE) or ".", exist_ok=True)
             with open(STATE_FILE, "w") as f:
                 f.write(payload)
-        persist_dirty = False
+        engine.dirty = False
     except Exception as e:
         print(f">>> ⚠️ Falha ao persistir estado: {e}")
 
@@ -166,86 +152,18 @@ async def persist_load():
     try:
         if UPSTASH_URL and UPSTASH_TOKEN:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-                async with s.post(UPSTASH_URL, headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"},
-                                  json=["GET", STATE_KEY]) as resp:
+                async with s.post(UPSTASH_URL, headers={"Authorization": f"Bearer {UPSTASH_TOKEN}"}, json=["GET", STATE_KEY]) as resp:
                     raw = (await resp.json()).get("result")
         elif os.path.exists(STATE_FILE):
             with open(STATE_FILE) as f:
                 raw = f.read()
-        if raw:
-            data = json.loads(raw)
-            tr.update({k: v for k, v in data.get("tr", {}).items() if k in tr})
-            state["markers"] = data.get("markers", [])
-            state["order_book"] = data.get("order_book", [])
-            print(f">>> 💾 Estado restaurado: saldo US$ {tr['balance']:.2f}, posição {tr['position']}")
+        if raw and engine.restore(json.loads(raw)):
+            print(f">>> 💾 Estado restaurado: patrimônio US$ {engine.st['eq']:.2f}, {len(engine.st['positions'])} posição(ões)")
     except Exception as e:
         print(f">>> ⚠️ Não foi possível restaurar o estado: {e}")
-    sync_public_state()
 
 
-def sync_public_state():
-    n = tr["wins"] + tr["losses"]
-    state["balance"] = tr["balance"]
-    state["in_position"] = tr["position"] != 0
-    state["current_position"] = tr["position"]
-    state["entry_price"] = tr["entry_price"]
-    state["adaptation"].update({
-        "wins": tr["wins"], "losses": tr["losses"],
-        "current_win_rate": round(tr["wins"] / n * 100, 1) if n else 0.0})
-    day_pnl = tr["balance"] / tr["day_start_balance"] - 1 if tr["day_start_balance"] else 0.0
-    state["starting_balance"] = STARTING_BALANCE
-    state["model"] = {"name": os.path.basename(MODEL_PATH) if MODEL_PATH else "", "loaded": onnx_session is not None,
-                      "paper_trading": True}
-    state["risk"].update({
-        "max_trades_per_day": F.MAX_TRADES_PER_DAY, "daily_loss_limit_pct": DAILY_LOSS_LIMIT * 100,
-        "cooldown_left": tr["cooldown"], "cooldown_bars": F.COOLDOWN_BARS,
-        "stop_loss_pct": F.STOP_LOSS_PCT * 100, "take_profit_pct": F.TAKE_PROFIT_PCT * 100,
-        "conf_threshold": CONF_THRESHOLD, "entries_blocked": entry_block_reason(),
-        "halted": tr["halted"], "kill_switch_pct": KILL_SWITCH_DD * 100,
-        "trades_today": tr["trades_today"], "daily_pnl_pct": round(day_pnl * 100, 2),
-        "max_drawdown_pct": round(tr["max_dd"] * 100, 2),
-        "profit_factor": round(tr["gross_win"] / tr["gross_loss"], 2) if tr["gross_loss"] > 0 else 0.0})
-
-
-# --- MOTOR ONNX ---
-def load_brain(path=None):
-    """Carrega modelo + estatísticas de normalização pareadas. Só substitui o atual se tudo estiver válido."""
-    global onnx_session, norm_stats, lstm_states, MODEL_PATH
-    path = path or MODEL_PATH
-    if not path or not os.path.exists(path):
-        print(f">>> ⚠️ Modelo ONNX não encontrado ({path}).")
-        return False
-    try:
-        stats = F.load_stats(F.stats_path_for(path))
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = 1
-        sess = ort.InferenceSession(path, sess_options=opts, providers=['CPUExecutionProvider'])
-        if sess.get_inputs()[0].shape[1] != F.OBS_DIM or len(sess.get_outputs()) != 3:
-            raise ValueError(f"modelo incompatível (esperado obs={F.OBS_DIM} e saídas logits+h+c)")
-        onnx_session, norm_stats, lstm_states, MODEL_PATH = sess, stats, None, path
-        print(f">>> ✅ Motor ONNX pronto: {path}")
-        return True
-    except Exception as e:
-        print(f">>> ❌ Não foi possível carregar {path}: {e}")
-        return False
-    finally:
-        gc.collect()
-
-
-def run_brain(obs_vec):
-    """Um passo da rede, avançando a memória da LSTM (chamar UMA vez por vela fechada)."""
-    global lstm_states
-    shape = onnx_session.get_inputs()[1].shape
-    if lstm_states is None:
-        h = np.zeros((shape[0], 1, shape[2]), np.float32)
-        lstm_states = (h, h.copy())
-    logits, h, c = onnx_session.run(None, {"obs": obs_vec.reshape(1, -1).astype(np.float32),
-                                           "lstm_states_h": lstm_states[0], "lstm_states_c": lstm_states[1]})
-    lstm_states = (h, c)
-    return logits[0]
-
-
-# --- SENTINELA DE NOTÍCIAS ---
+# --- SENTINELA DE NOTÍCIAS (modo observação: informa, não bloqueia) ---
 try:
     from google import genai
     client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
@@ -253,6 +171,8 @@ except Exception:
     client = None
 
 _NEWS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+last_analysis_time = 0
+cached_analysis = {"score": 0.1, "status": "SAFE", "reason": "Sincronizando com a rede neural (cache)..."}
 
 
 async def _cryptocompare_news_titles(session, query: str) -> list:
@@ -317,7 +237,7 @@ async def analyze_sentiment_with_llm(headlines):
 
 
 async def analyst_market_loop():
-    print(">>> 🕵️ IA_ANALISTA: Iniciando Sentinela de Mercado...")
+    print(">>> 🕵️ IA_ANALISTA: Iniciando Sentinela de Mercado (modo observação)...")
     while True:
         try:
             headlines = await fetch_btc_news()
@@ -335,9 +255,8 @@ async def analyst_market_loop():
             na = state["news_agent"]
             na["mode"] = "observação"
             if na["status"] in ("CAUTION", "DANGER"):
-                tr["news_events"] = (tr["news_events"] + [{"ts": int(time.time()), "status": na["status"],
-                                                           "score": na["sentiment_score"]}])[-100:]
-            update_safe_state()
+                engine.st["news_events"] = (engine.st["news_events"] + [{"ts": int(time.time()), "status": na["status"],
+                                                                         "score": na["sentiment_score"]}])[-100:]
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
             raise
@@ -346,246 +265,29 @@ async def analyst_market_loop():
             await asyncio.sleep(60)
 
 
-# --- NÚCLEO DE TRADING (paper trading: simula, não envia ordens à corretora) ---
-def now_hms():
-    return datetime.now().strftime('%H:%M:%S')
-
-
-def _bar_time(ts_ms):
-    return int(ts_ms // 1000)
-
-
-async def _send_telegram(text):
-    """Envia ao Telegram. Retorna (ok, detalhe); o detalhe nunca contém o token."""
-    if not (TG_TOKEN and TG_CHAT):
-        return False, "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID não configurados no servidor"
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as sess:
-            async with sess.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_CHAT, "text": text}) as r:
-                if r.status == 200:
-                    return True, ""
-                try:
-                    desc = (await r.json()).get("description", "")
-                except Exception:
-                    desc = ""
-                return False, f"Telegram respondeu HTTP {r.status}: {desc}"
-    except Exception as e:                      # nunca registra o token
-        print(f">>> ⚠️ Telegram indisponível: {type(e).__name__}")
-        return False, f"falha de rede ({type(e).__name__})"
-
-
-def notify(text):
-    """Alerta no Telegram (silencioso se não configurado ou fora do loop de eventos)."""
-    try:
-        asyncio.get_running_loop().create_task(_send_telegram(text))
-    except RuntimeError:
-        pass
-
-
-def close_position(price, bar_ts_ms, reason):
-    """Fecha a posição aberta: PnL bruto, taxa de saída e contabilidade."""
-    pos = tr["position"]
-    change = (price - tr["entry_price"]) / tr["entry_price"] if pos == 1 else (tr["entry_price"] - price) / tr["entry_price"]
-    tr["balance"] += tr["balance"] * change
-    tr["balance"] -= tr["balance"] * F.COST_PER_SIDE
-    net = tr["balance"] - tr["trade_start_balance"]
-    if net > 0:
-        tr["wins"] += 1
-        tr["gross_win"] += net
-    else:
-        tr["losses"] += 1
-        tr["gross_loss"] += -net
-    tr["trade_log"] = (tr["trade_log"] + [{
-        "open_ts": tr["open_ts"], "close_ts": int(time.time()), "side": pos, "net": round(net, 4),
-        "news": tr["news_at_open"], "reason": reason}])[-500:]
-    tr["position"], tr["entry_price"], tr["cooldown"] = 0, 0.0, F.COOLDOWN_BARS
-    tr["peak"] = max(tr["peak"], tr["balance"])
-    tr["max_dd"] = min(tr["max_dd"], tr["balance"] / tr["peak"] - 1)
-
-    state["markers"].append({"time": _bar_time(bar_ts_ms), "position": "aboveBar", "color": "#facc15",
-                             "shape": "square", "text": f"SAÍDA: {'GANHO' if net > 0 else 'PERDA'}"})
-    lado = "compra (long)" if pos == 1 else "venda (short)"
-    state["order_book"].insert(0, {"text": f"[{now_hms()}] 🏁 Fechou {lado} ({reason}) | PnL líquido: US$ {net:.2f} ({'ganho ✅' if net > 0 else 'perda ❌'})"})
-    state["markers"] = state["markers"][-120:]
-    state["order_book"] = state["order_book"][:120]
-    notify(f"🏁 {lado} fechada ({reason})\nResultado líquido: US$ {net:+.2f}\nSaldo: US$ {tr['balance']:.2f} (simulação)")
-
-
-def open_position(side, price, bar_ts_ms):
-    tr["trade_start_balance"] = tr["balance"]
-    tr["balance"] -= tr["balance"] * F.COST_PER_SIDE
-    tr["position"], tr["entry_price"] = side, price
-    tr["trades_today"] += 1
-    tr["news_at_open"], tr["open_ts"] = state["news_agent"]["status"], int(time.time())
-    state["markers"].append({"time": _bar_time(bar_ts_ms), "position": "belowBar" if side == 1 else "aboveBar",
-                             "color": "#22c55e" if side == 1 else "#ef4444", "shape": "circle",
-                             "text": f"ENTRADA {'COMPRA' if side == 1 else 'VENDA'}"})
-    lado = "compra (long)" if side == 1 else "venda (short)"
-    state["order_book"].insert(0, {"text": f"[{now_hms()}] 🚀 Abriu {lado} a US$ {price:.2f} (custo: {F.COST_PER_SIDE*100:.3f}%)"})
-    notify(f"🚀 {lado} aberta em {SYMBOL} a US$ {price:,.2f} (simulação)")
-
-
-def roll_day():
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if tr["day"] != today:
-        tr["day"], tr["day_start_balance"], tr["trades_today"] = today, tr["balance"], 0
-
-
-def entry_block_reason():
-    """Motivo pelo qual novas entradas estão proibidas agora ('' = liberado)."""
-    if tr["halted"]:
-        return f"kill-switch: queda de {KILL_SWITCH_DD*100:.0f}% desde o pico (reative no painel admin)"
-    if tr["balance"] / tr["day_start_balance"] - 1 <= DAILY_LOSS_LIMIT:
-        return f"limite de perda diária ({DAILY_LOSS_LIMIT*100:.0f}%)"
-    if time.time() < tr["breaker_until"]:
-        return "freio de volatilidade (movimento brusco do preço)"
-    return ""
-
-
-def build_live_features(closed_15m, closed_4h):
-    cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-    df = F.compute_features(pd.DataFrame(closed_15m, columns=cols), pd.DataFrame(closed_4h, columns=cols))
-    return df, F.normalize(df, norm_stats)
-
-
-def obs_with_position(x, price):
-    pos = tr["position"]
-    unreal = pos * (price / tr["entry_price"] - 1.0) / F.STOP_LOSS_PCT if pos != 0 else 0.0
-    return np.concatenate([x, np.array([pos, np.clip(unreal, -2.0, 2.0)], np.float32)])
-
-
-async def trading_tick():
-    global feat_row, lstm_states
-    stop_note = ""
-    ohlcv = await exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=720)
-    if len(ohlcv) < 300:
-        raise RuntimeError("histórico insuficiente da corretora")
-    now_ms = int(time.time() * 1000)
-    forming = ohlcv[-1] if ohlcv[-1][0] + F.M15_MS > now_ms else None
-    closed = ohlcv[:-1] if forming else ohlcv
-    live = forming or closed[-1]
-    price = float(live[4])
-    last_closed_ts = int(closed[-1][0])
-    if len(closed) >= 5 and abs(closed[-1][4] / closed[-5][4] - 1) >= BREAKER_MOVE:   # 4 velas de 15m = 1h
-        if time.time() >= tr["breaker_until"]:
-            print(f">>> 🧯 Freio de volatilidade: {closed[-1][4] / closed[-5][4] - 1:+.2%} em 1h")
-            notify(f"🧯 Freio de volatilidade: {closed[-1][4] / closed[-5][4] - 1:+.2%} em 1h. Novas entradas pausadas.")
-        tr["breaker_until"] = time.time() + BREAKER_PAUSE_S
-    roll_day()
-
-    # --- stop-loss / take-profit com o preço ao vivo (checado a cada POLL_SECONDS) ---
-    if tr["position"] != 0:
-        chg = tr["position"] * (price - tr["entry_price"]) / tr["entry_price"]
-        if chg <= -F.STOP_LOSS_PCT or chg >= F.TAKE_PROFIT_PCT:
-            close_position(price, live[0], "STOP-LOSS" if chg < 0 else "TAKE-PROFIT")
-            stop_note = "🚨 STOP-LOSS ACIONADO" if chg < 0 else "🎯 ALVO ATINGIDO"
-            sync_public_state()
-            await persist_save()
-
-    # --- kill-switch global: queda desde o pico (inclui o resultado flutuante) ---
-    if not tr["halted"]:
-        float_pnl = tr["balance"] * tr["position"] * (price - tr["entry_price"]) / tr["entry_price"] if tr["position"] else 0.0
-        if (tr["balance"] + float_pnl) / tr["peak"] - 1 <= -KILL_SWITCH_DD:
-            if tr["position"] != 0:
-                close_position(price, live[0], "KILL-SWITCH")
-            tr["halted"] = True
-            stop_note = "🛑 KILL-SWITCH ACIONADO"
-            notify(f"🛑 KILL-SWITCH: queda de {KILL_SWITCH_DD*100:.0f}% desde o pico. Robô PAUSADO até você reativar no painel.\nSaldo: US$ {tr['balance']:.2f}")
-            sync_public_state()
-            await persist_save()
-
-    # --- decisão da rede: uma vez por vela FECHADA ---
-    if last_closed_ts != tr["last_bar_ts"]:
-        if onnx_session is not None and norm_stats is not None:
-            ohlcv4 = await exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=720)
-            closed4 = [r for r in ohlcv4 if r[0] + F.H4_MS <= now_ms]
-            df, X = await asyncio.to_thread(build_live_features, closed, closed4)
-            row = df.iloc[-1]
-            feat_row = {k: float(row[k]) for k in ('rsi', 'bb_width', 'ema50_4h', 'ema200_4h')}
-
-            # aquece/atualiza a memória da LSTM com as velas que ela ainda não viu
-            if lstm_states is None:
-                backlog = range(max(0, len(df) - 1 - WARMUP_BARS), len(df) - 1)
-            else:
-                backlog = [i for i in range(len(df) - 1) if df['timestamp'].iat[i] > tr["last_bar_ts"]]
-            for i in backlog:
-                run_brain(obs_with_position(X[i], float(df['close'].iat[i])))
-
-            tr["cooldown"] = max(0, tr["cooldown"] - 1)
-            logits = run_brain(obs_with_position(X[-1], price))
-            action, conf = F.pick_action(logits, tr["position"], CONF_THRESHOLD)
-            target = F.resolve_target(tr["position"], action, tr["cooldown"], tr["trades_today"])
-            state["risk"]["confidence"] = round(conf, 3)
-
-            block = entry_block_reason()
-            if target != 0 and tr["position"] == 0 and block:
-                target = 0
-            if target != tr["position"]:
-                if tr["position"] != 0:
-                    close_position(price, row['timestamp'], "sinal da IA")
-                if target != 0:
-                    open_position(target, price, row['timestamp'])
-                await persist_save()
-            tr["last_bar_ts"] = last_closed_ts
-            sync_public_state()
-
-    # --- status e painel ---
-    if onnx_session is None or norm_stats is None:
-        state["status"] = "⏳ Aguardando o primeiro cérebro (gen 1 ainda não passou no portão de aprovação)"
-    elif stop_note:
-        state["status"] = stop_note
-    elif tr["position"] != 0:
-        state["status"] = "📊 MONITORANDO POSIÇÃO..."
-    elif entry_block_reason():
-        state["status"] = f"⏳ ENTRADA BLOQUEADA: {entry_block_reason()}"
-    elif tr["cooldown"] > 0:
-        state["status"] = f"🧊 COOLDOWN: {tr['cooldown']} vela(s)"
-    else:
-        state["status"] = "🔍 BUSCANDO OPORTUNIDADE..."
-
-    floating = 0.0
-    if tr["position"] != 0:
-        floating = tr["balance"] * tr["position"] * (price - tr["entry_price"]) / tr["entry_price"]
-    state["floating_pnl"] = floating
-    state["display_balance"] = tr["balance"] + floating
-    state["last_candle"] = {"time": _bar_time(live[0]), "open": live[1], "high": live[2], "low": live[3],
-                            "close": live[4], **feat_row}
-    sync_public_state()
-    update_safe_state()
-
-
-async def sniper_loop():
-    global exchange
+# --- LOOP DO MOTOR ---
+async def engine_loop():
     await persist_load()
-    state["status"] = "⚙️ Carregando Motor de Inferência..."
-    await asyncio.to_thread(load_brain)
-    state["adaptation"]["generation"] = int(m.group(1)) if MODEL_PATH and (m := re.search(r"gen_(\d+)", MODEL_PATH)) else 0
-    exchange = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
+    ok, msg = await asyncio.to_thread(engine.load_package)
+    print(f">>> 🧠 Pacote: {engine.pkg}" if ok else f">>> ⏳ Sem modelo: {msg}")
     last_save = time.time()
-
     while True:
-        t0 = time.time()
         try:
-            await trading_tick()
-            ms = (time.time() - t0) * 1000
-            perf = state["performance"]
-            perf["loop_avg_ms"] = round(perf["loop_avg_ms"] * 0.9 + ms * 0.1, 1)
-            perf["loop_max_ms"] = round(max(perf["loop_max_ms"], ms), 1)
-            if time.time() - last_save > 300:
+            await engine.tick()
+            if engine.dirty or time.time() - last_save > 300:
                 await persist_save()
                 last_save = time.time()
+            refresh_state()
             await asyncio.sleep(POLL_SECONDS)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f">>> ❌ Erro no ciclo de trading: {type(e).__name__}: {e}")
-            state["status"] = "❌ Erro de conexão com a corretora (tentando novamente)"
-            if any(w in str(e).lower() for w in ("ssl", "closed", "connectionreset")):
-                try:
-                    await exchange.close()
-                except Exception:
-                    pass
-                exchange = ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
+            engine.last_error = f"{type(e).__name__}: {e}"
+            print(f">>> ❌ Erro no ciclo do motor: {engine.last_error}")
+            if any(w in str(e).lower() for w in ("ssl", "closed", "connection", "timeout", "network")):
+                await engine.close()
+                engine.ex = None
+            refresh_state()
             await asyncio.sleep(10)
 
 
@@ -595,25 +297,20 @@ async def lifespan(app: FastAPI):
     async def heartbeat():
         while True:
             state["uptime"] = time.strftime('%H:%M:%S', time.gmtime(int(time.time() - state["started_at"])))
-            update_safe_state()
+            refresh_state()
             await asyncio.sleep(1.0)
 
-    tasks = [asyncio.create_task(c) for c in (heartbeat(), sniper_loop(), analyst_market_loop())]
+    tasks = [asyncio.create_task(c) for c in (heartbeat(), engine_loop(), analyst_market_loop())]
     try:
         yield
     finally:
         for t in tasks:
             t.cancel()
         await persist_save()
-        if exchange is not None:
-            try:
-                await exchange.close()
-            except Exception:
-                pass
+        await engine.close()
 
 
 app = FastAPI(lifespan=lifespan)
-# FRONTEND_URL (opcional, separada por vírgula) + qualquer *.vercel.app e localhost. A barra final é ignorada.
 _origins = [o.strip().rstrip("/") for o in os.environ.get("FRONTEND_URL", "").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=_origins,
                    allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app|http://localhost:\d+",
@@ -632,14 +329,14 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model_loaded": onnx_session is not None, "uptime": state["uptime"]}
+    return {"status": "ok", "model_loaded": engine.loaded, "uptime": state["uptime"], "source": engine.ex_name,
+            "selftest": engine.selftest["ok"]}
 
 
 @app.get("/ready")
 async def readiness_probe():
-    ok = onnx_session is not None
-    return Response(content=json.dumps({"ready": ok, "model": MODEL_PATH}), media_type="application/json",
-                    status_code=200 if ok else 503)
+    ok = engine.loaded and engine.ready_bars
+    return Response(content=json.dumps({"ready": ok, "model": engine.pkg}), media_type="application/json", status_code=200 if ok else 503)
 
 
 @app.get("/api/state")
@@ -659,18 +356,53 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 @app.get("/api/historico")
-async def get_historico():
-    """Velas de 15m (mesmo timeframe da vela ao vivo e dos marcadores do gráfico)."""
-    try:
-        ex = exchange or ccxt.kraken({'enableRateLimit': True, 'timeout': 30000})
-        try:
-            ohlcv = await ex.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME, limit=720)
-        finally:
-            if ex is not exchange:
-                await ex.close()
-        return [{"time": int(r[0] / 1000), "open": r[1], "high": r[2], "low": r[3], "close": r[4]} for r in ohlcv]
-    except Exception:
+async def get_historico(asset: str = "BTC", limit: int = 500):
+    """Velas de 4H FECHADAS do par (a vela em formação chega pelo estado ao vivo)."""
+    df = engine.bars.get(asset.upper())
+    if df is None or df.empty:
         return []
+    d = df.tail(max(10, min(limit, 1500)))
+    return [{"time": int(r.timestamp // 1000), "open": float(r.open), "high": float(r.high), "low": float(r.low), "close": float(r.close)}
+            for r in d.itertuples()]
+
+
+@app.get("/api/download-dados")
+async def download_dados(x_admin_password: str = Header(None)):
+    require_admin(x_admin_password)
+    log = engine.st.get("trade_log", [])
+    if not log:
+        raise HTTPException(status_code=404, detail="Nenhuma operação ainda.")
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=log[0].keys())
+    w.writeheader()
+    w.writerows(log)
+    out.seek(0)
+    return StreamingResponse(out, media_type="text/csv",
+                             headers={"Content-Disposition": f"attachment; filename=operacoes_{int(time.time())}.csv"})
+
+
+@app.post("/api/upload-cerebro")
+async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = Header(None)):
+    """Aceita o par gen_N.onnx + gen_N.json (envie os dois). O modelo só entra em uso se o par for válido e coerente.
+    Atenção: no plano free o disco é apagado em reinícios; para ficar de vez, coloque os arquivos no repositório."""
+    require_admin(x_admin_password)
+    name = os.path.basename(file.filename or "")
+    m = re.fullmatch(r"gen_(\d+)\.(onnx|json)", name)
+    if not m:
+        raise HTTPException(status_code=400, detail="Envie gen_N.onnx e gen_N.json (ex.: gen_1.onnx e gen_1.json).")
+    content = await file.read()
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Arquivo grande demais (máx 25MB).")
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    with open(os.path.join(MODELS_DIR, name), "wb") as f:
+        f.write(content)
+    base = os.path.join(MODELS_DIR, f"gen_{m.group(1)}")
+    if not (os.path.exists(base + ".onnx") and os.path.exists(base + ".json")):
+        return {"status": "recebido", "arquivo": name, "falta": "envie também o outro arquivo do par"}
+    ok, msg = await asyncio.to_thread(engine.load_package, base)
+    if not ok:
+        raise HTTPException(status_code=422, detail=msg)
+    return {"status": "sucesso", "modelo": engine.pkg}
 
 
 @app.post("/api/test-alert")
@@ -683,65 +415,26 @@ async def test_alert(x_admin_password: str = Header(None)):
 
 @app.post("/api/resume")
 async def resume(x_admin_password: str = Header(None)):
-    """Reativa o robô depois do kill-switch (o pico é redefinido para o saldo atual)."""
+    """Reativa o robô depois do kill-switch (o pico é redefinido para o patrimônio atual)."""
     require_admin(x_admin_password)
-    tr["halted"], tr["peak"] = False, tr["balance"]
-    sync_public_state()
+    engine.resume()
     await persist_save()
+    refresh_state()
     notify("▶️ Robô reativado manualmente.")
-    return {"status": "reativado", "saldo": tr["balance"]}
+    return {"status": "reativado", "patrimonio": engine.mtm()[0]}
 
 
 @app.get("/api/shadow-report")
 async def shadow_report():
     """Mede se o Analista de Notícias agregaria valor: resultado dos trades por status no momento da entrada."""
     groups = {}
-    for t in tr["trade_log"]:
+    for t in engine.st["trade_log"]:
         g = groups.setdefault(t["news"], {"trades": 0, "ganhos": 0, "pnl_liquido": 0.0})
         g["trades"] += 1
         g["ganhos"] += int(t["net"] > 0)
         g["pnl_liquido"] = round(g["pnl_liquido"] + t["net"], 4)
-    return {"modo": "observação (não bloqueia entradas)", "leituras_que_bloqueariam": len(tr["news_events"]),
-            "trades_por_status_do_analista": groups, "ultimas_leituras": tr["news_events"][-10:]}
-
-
-@app.get("/api/download-dados")
-async def download_dados(x_admin_password: str = Header(None)):
-    require_admin(x_admin_password)
-    markers = state.get('markers', [])
-    if not markers:
-        raise HTTPException(status_code=404, detail="Nenhum dado.")
-    out = io.StringIO()
-    w = csv.DictWriter(out, fieldnames=markers[0].keys())
-    w.writeheader()
-    w.writerows(markers)
-    out.seek(0)
-    return StreamingResponse(out, media_type="text/csv",
-                             headers={"Content-Disposition": f"attachment; filename=live_market_data_{int(time.time())}.csv"})
-
-
-@app.post("/api/upload-cerebro")
-async def upload_cerebro(file: UploadFile = File(...), x_admin_password: str = Header(None)):
-    """Aceita um .onnx e/ou o .stats.json pareado. Um modelo só entra em uso se carregar com as stats dele."""
-    require_admin(x_admin_password)
-    name = os.path.basename(file.filename or "")
-    if not (name.endswith(".onnx") or name.endswith(".stats.json")):
-        raise HTTPException(status_code=400, detail="Envie um .onnx ou o .stats.json correspondente.")
-    content = await file.read()
-    if len(content) > 25 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Arquivo grande demais (máx 25MB).")
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    dest = os.path.join(MODELS_DIR, name)
-    with open(dest, "wb") as f:
-        f.write(content)
-    if name.endswith(".stats.json"):
-        return {"status": "stats salvo", "arquivo": name}
-    ok = await asyncio.to_thread(load_brain, dest)
-    if not ok:
-        raise HTTPException(status_code=422, detail="Modelo rejeitado (envie antes o .stats.json pareado, com o mesmo nome base).")
-    state["adaptation"]["generation"] += 1
-    state["adaptation"]["learning_state"] = f"COMPILADO INJETADO ({name})"
-    return {"status": "sucesso"}
+    return {"modo": "observação (não bloqueia entradas)", "leituras_de_atencao_ou_perigo": len(engine.st["news_events"]),
+            "trades_por_status_do_analista": groups, "ultimas_leituras": engine.st["news_events"][-10:]}
 
 
 if __name__ == "__main__":
