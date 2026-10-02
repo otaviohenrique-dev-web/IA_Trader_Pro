@@ -1,0 +1,7 @@
+# Somente para treinar localmente (NÃO instalar no Render).
+-r requirements.txt
+gymnasium
+torch
+stable-baselines3
+sb3-contrib
+onnx

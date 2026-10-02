@@ -367,3 +367,13 @@ aiohttp              # Requisições assíncronas
 **Última atualização:** 17 de Abril de 2026  
 **Versão:** 3.0.1  
 **Status:** 🟢 Produção - Online
+
+---
+
+## Operação, risco e retreino (atualizado)
+
+- O robô é **paper trading** (simula; não envia ordens). Custos simulados: 0,05% taxa + 0,01% slippage por lado.
+- Treino, backtest e servidor usam o mesmo código (`features.py`, `envs/trading_env.py`). O backtest é **out-of-sample** (últimos 20%).
+- Retreinar: `python dojo.py --steps 1000000` (requer `requirements-train.txt`). Ele gera `.onnx` + `.stats.json`; envie os **dois** (ou commite) e só adote se `python backtest.py` mostrar `profit_factor > 1` e drawdown aceitável **fora da amostra**.
+- Freio de atividade: `CONF_THRESHOLD` (confiança mínima p/ abrir), `MAX_TRADES_PER_DAY`, `COOLDOWN_BARS`, `DAILY_LOSS_LIMIT`.
+- Render free: use 1 worker, configure `UPSTASH_REDIS_REST_URL/TOKEN` para persistir o estado e um ping externo em `/health` (ex.: UptimeRobot, 5 min) para evitar o sleep.

@@ -2,36 +2,39 @@ services:
   - type: web
     name: IA_Trader_Pro_Backend
     runtime: python
-    pythonVersion: 3.11
-    
-    # Não deve estar em raiz, mas no backend mesmo
     rootDir: backend
-    
-    # Build
-    buildCommand: pip install --no-cache-dir -r requirements.txt
-    
-    # Start - rapidíssimo
-    startCommand: python main.py
-    
-    # Health check automático - READINESS endpoint
-    healthCheckPath: /ready
-    healthCheckTimeout: 10
-    healthCheckInterval: 30
-    
-    # Recursos
-    plan: starter
 
-    # Variáveis
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+
+    # UM único processo: cada worker extra rodaria um robô independente (estado duplicado,
+    # o dobro de memória e de chamadas à corretora).
+    startCommand: python main.py
+
+    healthCheckPath: /health
+
+    plan: free
+
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: PYTHONUNBUFFERED
         value: "true"
-      - key: PORT
-        value: "10000"
       - key: WEB_CONCURRENCY
-        value: "2"
+        value: "1"
+      - key: CONF_THRESHOLD
+        value: "0.5"
       - key: GEMINI_API_KEY
         sync: false
       - key: CRYPTOCOMPARE_API_KEY
         sync: false
       - key: ADMIN_PASSWORD
+        sync: false
+      # Opcional, mas recomendado no plano free (disco efêmero): Upstash Redis (free) guarda
+      # saldo/posição para sobreviver a reinícios e ao "sleep" de 15 min.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      # Opcional: URL do frontend na Vercel para restringir o CORS (ex.: https://meuapp.vercel.app)
+      - key: FRONTEND_URL
         sync: false

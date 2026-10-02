@@ -1,51 +1,15 @@
 #!/usr/bin/env python3
-"""
-Main entry point for Render deployment.
-Inicializa o servidor FastAPI com MÁXIMA rapidez.
-
-⚡ OTIMIZAÇÕES:
-- Workers: 2 (foi 1) para melhor concorrência
-- Polling Frontend: 5s (foi 2s) para menos carga
-- Healthcheck: /ready (novo) para Render detectar readiness
-- Compressão: GZIP middleware ativado
-"""
-
+"""Ponto de entrada do Render: sobe o FastAPI em UM único processo (o robô guarda estado em memória)."""
 import os
-import sys
 
-# Definir PATH antes de tudo
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-print(">>> [1/5] Verificando ambiente...")
-port = os.environ.get("PORT", "10000")
-host = "0.0.0.0"
-
-print(f">>> [2/5] Será iniciado em {host}:{port}")
-
-# Importa Uvicorn PRIMEIRO (leve)
-print(">>> [3/5] Importando Uvicorn...")
 import uvicorn
 
-# AGORA importa a app (pesado, mas uvicorn já está pronto)
-print(">>> [4/5] Importando aplicação...")
 from server import app
 
-print(">>> [5/5] Iniciando servidor...")
-print(f">>> ✅ Servidor iniciando em {host}:{port}")
-print(f">>> 📍 Acesso: http://localhost:{port}")
-print(f">>> 🔗 Health: http://localhost:{port}/health")
-print(f">>> 🔗 Ready: http://localhost:{port}/ready")
-
-# Inicia Uvicorn
-uvicorn.run(
-    app,
-    host=host,
-    port=int(port),
-    log_level="info",
-    timeout_keep_alive=75,
-    access_log=True,
-    loop="auto",
-    ws="websockets",
-    proxy_headers=True,
-    forwarded_allow_ips="*",
-)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "10000"))
+    print(f">>> Servidor em 0.0.0.0:{port} | health: /health | estado: /api/state")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", timeout_keep_alive=75,
+                access_log=False, proxy_headers=True, forwarded_allow_ips="*")

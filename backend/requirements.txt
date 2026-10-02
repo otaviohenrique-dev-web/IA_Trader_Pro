@@ -7,8 +7,6 @@ google-genai
 ccxt
 pandas
 numpy
-matplotlib
 python-multipart
-gymnasium
-pandas-ta-classic 
+pandas-ta-classic
 onnxruntime

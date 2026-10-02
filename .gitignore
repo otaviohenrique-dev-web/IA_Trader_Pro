@@ -67,7 +67,7 @@ backend/models/*.onnx.data
 backend/models/*.onnx
 
 # 👇 EXCEÇÃO DE OURO: Mantém APENAS o Cérebro da Gen 11 👇
-!backend/models/sniper_pro_gen_11.onnx
+!backend/models/sniper_pro_gen_27.onnx
 
 backend/server.py.bkp
 frontend/app/pillow.py
